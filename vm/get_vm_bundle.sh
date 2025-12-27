@@ -137,7 +137,7 @@ outdir.mkdir(parents=True, exist_ok=True)
 # This matches what System76 machines use and ensures compatibility
 
 def get_iso_from_api(version, channel="nvidia", arch="amd64"):
-    """Get ISO URL from Pop!_OS API."""
+    """Get ISO URL and SHA256 from Pop!_OS API."""
     try:
         api_url = f"https://api.pop-os.org/builds/{version}/{channel}?arch={arch}"
         print(f"Querying Pop!_OS API: {api_url}")
@@ -146,28 +146,33 @@ def get_iso_from_api(version, channel="nvidia", arch="amd64"):
         if 'url' in data:
             iso_url = data['url']
             iso_name = iso_url.split("/")[-1]
+            sha256 = data.get('sha_sum', None)
             print(f"✓ Found ISO via API: {iso_name}")
-            return iso_url, iso_name
+            return iso_url, iso_name, sha256
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return None, None
+            return None, None, None
         print(f"Warning: API returned HTTP {e.code}")
     except Exception as e:
         print(f"Warning: API error: {e}")
-    return None, None
+    return None, None, None
+
+sha256_from_api = None
 
 if popos_version:
     # User specified version/URL
     if popos_version.startswith("http"):
         iso_url = popos_version
         iso_name = iso_url.split("/")[-1]
+        sha256_from_api = None  # Can't get SHA256 from direct URL
     else:
         # Try API first (most reliable)
-        iso_url, iso_name = get_iso_from_api(popos_version, "nvidia", "amd64")
+        iso_url, iso_name, sha256_from_api = get_iso_from_api(popos_version, "nvidia", "amd64")
         if not iso_url:
             # Fallback to old URL pattern
             iso_url = f"https://iso.pop-os.org/{popos_version}/pop-os_{popos_version}_amd64_nvidia.iso"
             iso_name = f"pop-os_{popos_version}_amd64_nvidia.iso"
+            sha256_from_api = None
 else:
     # Auto-detect: Try API with common versions (newest first)
     fallback_versions = ["24.04", "22.04", "23.04"]
@@ -176,7 +181,7 @@ else:
     
     for version in fallback_versions:
         print(f"Trying version {version} via API...")
-        iso_url, iso_name = get_iso_from_api(version, "nvidia", "amd64")
+        iso_url, iso_name, sha256_from_api = get_iso_from_api(version, "nvidia", "amd64")
         if iso_url:
             break
     
@@ -191,6 +196,7 @@ else:
                 urllib.request.urlopen(req, timeout=10)
                 iso_url = legacy_url
                 iso_name = f"pop-os_{version}_amd64_nvidia.iso"
+                sha256_from_api = None
                 print(f"✓ Found legacy URL: {iso_name}")
                 break
             except Exception:
@@ -215,15 +221,21 @@ try:
 except Exception as e:
     raise SystemExit(f"Failed to download Pop!_OS ISO: {e}")
 
-# Try to get SHA256 checksum if available
-sha256_url = iso_url + ".sha256"
-try:
-    sha256_content = urllib.request.urlopen(sha256_url).read().decode("utf-8").strip()
-    sha256_file = outdir / (iso_name + ".sha256")
-    sha256_file.write_text(sha256_content, encoding="utf-8")
-    print(f"Downloaded SHA256: {sha256_file}")
-except Exception:
-    print("Warning: Could not download SHA256 checksum for Pop!_OS ISO")
+# Save SHA256 checksum if available
+sha256_file = outdir / (iso_name + ".sha256")
+if sha256_from_api:
+    # Use SHA256 from API response
+    sha256_file.write_text(f"{sha256_from_api}  {iso_name}\n", encoding="utf-8")
+    print(f"Saved SHA256 from API: {sha256_file}")
+else:
+    # Try to get SHA256 checksum from URL (legacy method)
+    sha256_url = iso_url + ".sha256"
+    try:
+        sha256_content = urllib.request.urlopen(sha256_url, timeout=10).read().decode("utf-8").strip()
+        sha256_file.write_text(sha256_content, encoding="utf-8")
+        print(f"Downloaded SHA256: {sha256_file}")
+    except Exception:
+        print("Warning: Could not download SHA256 checksum for Pop!_OS ISO")
 PY
 
 POPOS_ISO="$(ls -1 "$VM_BUNDLE_DIR/popos"/pop-os_*.iso 2>/dev/null | head -n1)"

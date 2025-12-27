@@ -50,7 +50,10 @@ log() {
 # ============
 if [[ "$FORCE" != "true" ]]; then
   echo "This will remove:"
-  echo "  - VM directory: $VM_DIR"
+  echo "  - VM disk, logs, and scripts"
+  if [[ -d "$VM_DIR" ]] && [[ -f "$VM_DIR/iso/pop-os.iso" ]]; then
+    echo "  - Note: Valid Pop!_OS ISO will be preserved if checksum verifies"
+  fi
   if [[ "$REMOVE_QEMU" == "true" ]]; then
     echo "  - QEMU installation (via Homebrew)"
   fi
@@ -67,6 +70,9 @@ fi
 # 1) Remove VM Directory
 # ============
 log "Removing VM directory..."
+
+# Initialize preserve flag
+PRESERVE_ISO="false"
 
 if [[ -d "$VM_DIR" ]]; then
   log "Found VM directory: $VM_DIR"
@@ -97,15 +103,75 @@ if [[ -d "$VM_DIR" ]]; then
     fi
   fi
   
+  # Check if Pop!_OS ISO exists and should be preserved
+  POPOS_ISO="$VM_DIR/iso/pop-os.iso"
+  POPOS_SHA256="$VM_DIR/iso/pop-os.iso.sha256"
+  
+  if [[ -f "$POPOS_ISO" ]]; then
+    log "Found Pop!_OS ISO: $POPOS_ISO"
+    
+    if [[ -f "$POPOS_SHA256" ]]; then
+      log "Found SHA256 checksum file, validating ISO..."
+      if command -v shasum >/dev/null 2>&1; then
+        if (cd "$(dirname "$POPOS_ISO")" && shasum -a 256 -c "$(basename "$POPOS_SHA256")" >/dev/null 2>&1); then
+          log "✓ ISO checksum validation passed - preserving ISO"
+          PRESERVE_ISO="true"
+        else
+          log "✗ ISO checksum validation failed - will remove ISO"
+          log "Note: ISO appears to be corrupted or wrong version"
+        fi
+      else
+        log "WARNING: shasum not found, cannot validate checksum"
+        log "Preserving ISO (checksum validation skipped)"
+        PRESERVE_ISO="true"
+      fi
+    else
+      log "ISO exists but no checksum file found"
+      log "Preserving ISO (checksum validation skipped)"
+      log "Note: ISO integrity cannot be verified without checksum file"
+      PRESERVE_ISO="true"
+    fi
+  fi
+  
   # Calculate size before removal
   if command -v du >/dev/null 2>&1; then
     SIZE=$(du -sh "$VM_DIR" 2>/dev/null | cut -f1 || echo "unknown")
     log "VM directory size: $SIZE"
   fi
   
-  # Remove the directory
-  rm -rf "$VM_DIR"
-  log "✓ Removed VM directory: $VM_DIR"
+  # Remove VM components, preserving ISO if valid
+  if [[ "$PRESERVE_ISO" == "true" ]]; then
+    log "Preserving valid Pop!_OS ISO..."
+    
+    # Remove subdirectories except iso/
+    if [[ -d "$VM_DIR/disk" ]]; then
+      rm -rf "$VM_DIR/disk"
+      log "✓ Removed disk directory"
+    fi
+    if [[ -d "$VM_DIR/logs" ]]; then
+      rm -rf "$VM_DIR/logs"
+      log "✓ Removed logs directory"
+    fi
+    if [[ -d "$VM_DIR/scripts" ]]; then
+      rm -rf "$VM_DIR/scripts"
+      log "✓ Removed scripts directory"
+    fi
+    
+    # Remove any other files in VM_DIR root (like README.md)
+    find "$VM_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
+    
+    log "✓ Cleaned up VM directory (preserved ISO)"
+    log "  Preserved: $POPOS_ISO"
+    if [[ -f "$POPOS_SHA256" ]]; then
+      log "  Preserved: $POPOS_SHA256"
+    else
+      log "  Note: No checksum file found (ISO preserved anyway)"
+    fi
+  else
+    # Remove the entire directory
+    rm -rf "$VM_DIR"
+    log "✓ Removed VM directory: $VM_DIR"
+  fi
 else
   log "VM directory not found: $VM_DIR (nothing to remove)"
 fi
@@ -159,7 +225,12 @@ log "Cleanup Complete!"
 log "=========================================="
 log ""
 log "Removed:"
-log "  - VM directory: $VM_DIR"
+if [[ "$PRESERVE_ISO" == "true" ]]; then
+  log "  - VM disk, logs, and scripts"
+  log "  - Preserved valid Pop!_OS ISO: $VM_DIR/iso/pop-os.iso"
+else
+  log "  - VM directory: $VM_DIR"
+fi
 if [[ "$REMOVE_QEMU" == "true" ]]; then
   log "  - QEMU installation"
 fi
