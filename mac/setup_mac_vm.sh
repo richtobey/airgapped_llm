@@ -942,7 +942,7 @@ QEMU_ARGS=(
   -netdev user,id=net0
   -device virtio-net,netdev=net0
   -display cocoa
-  -vga virtio
+  -device virtio-vga,edid=on,xres=1280,yres=720
   -usb
   -device usb-tablet
 )
