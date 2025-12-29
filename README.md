@@ -51,11 +51,14 @@ airgapped_llm/
 
 ### For Bundle Creation (Online Machine)
 
-- **macOS or Linux** (macOS can create bundle, but APT repo needs Linux)
-- **Python 3** (for downloading packages)
+- **Pop!_OS or Ubuntu/Debian-based Linux** (amd64) - **REQUIRED**
+  - Script requires Linux to build APT repositories, compile Python packages, and vendor Rust crates
+  - All components are pre-built on the online system for offline installation
+- **Python 3** (for downloading and building packages)
 - **Internet connection** (for downloading components)
 - **Disk space**: ~35GB+ (for all models and components)
-- **Optional**: Rust/Cargo (if bundling Rust crates)
+- **Rust/Cargo** (if bundling Rust crates) - will be installed if needed
+- **Build tools** (gcc, g++, make, cmake) - will be installed via APT
 
 ### For Installation (Airgapped System)
 
@@ -70,7 +73,14 @@ airgapped_llm/
 
 ### Method 1: Direct Installation (Traditional)
 
-#### Step 1: Create the Bundle (On Online Machine)
+#### Step 1: Create the Bundle (On Online Pop!_OS Machine)
+
+**IMPORTANT**: This script must be run on a Linux system (Pop!_OS/Ubuntu/Debian) with internet access. It will:
+- Download all components
+- Build APT repository with system packages
+- Build Python packages from source into wheels
+- Vendor Rust crates (if Cargo.toml exists)
+- Pull Ollama models
 
 ```bash
 # Clone or download this repository
@@ -82,16 +92,23 @@ cd airgap
 # Option 1: Use default models (all 3 recommended models)
 ./get_bundle.sh
 
-# Option 2: Bundle only specific models
+# Option 2: Bundle only specific models (faster for testing)
 export OLLAMA_MODELS="mistral:7b-instruct"
 ./get_bundle.sh
 
 # Option 3: Bundle custom Python packages
 # Edit airgap/requirements.txt or create your own
+export PYTHON_REQUIREMENTS="/path/to/requirements.txt"
+./get_bundle.sh
+
+# Option 4: Move models instead of copy (saves disk space)
+export MOVE_MODELS=true
 ./get_bundle.sh
 ```
 
 The bundle will be created in `./airgap_bundle/` (or `$BUNDLE_DIR` if set).
+
+**Note**: All packages are pre-built during bundle creation, so installation on the airgapped system will be fast and won't require compilation.
 
 #### Step 2: Transfer Bundle to Airgapped System
 
@@ -109,12 +126,14 @@ cp -r airgap_bundle /path/to/external/drive/
 # On the airgapped Pop!_OS system
 cd /path/to/airgap_bundle
 
-# Run the installation script
+# Run the installation script (installs pre-built packages only)
 ./install_offline.sh
 
 # Or specify custom bundle location
 BUNDLE_DIR=/path/to/airgap_bundle ./install_offline.sh
 ```
+
+**Note**: Installation is fast because all packages are pre-built. No compilation happens on the airgapped system.
 
 #### Step 4: Start Using
 
@@ -218,7 +237,7 @@ See [`mac/README.md`](mac/README.md) for detailed macOS-specific documentation.
 
 ### Python Packages
 
-All packages from `requirements.txt` plus all transitive dependencies:
+All packages from `requirements.txt` plus all transitive dependencies, **pre-built as wheels**:
 
 - Code quality: black, ruff, mypy, pylint
 - Testing: pytest, pytest-cov, pytest-mock
@@ -227,9 +246,11 @@ All packages from `requirements.txt` plus all transitive dependencies:
 - Utilities: pydantic, click, rich, sphinx
 - And more (customize `requirements.txt`)
 
+**All packages are compiled into wheels during bundle creation**, so installation on the airgapped system is fast and requires no compilation.
+
 ### Rust Crates
 
-If `Cargo.toml` is provided, all Rust dependencies are vendored for offline use.
+If `Cargo.toml` is provided, all Rust dependencies are **vendored** during bundle creation for offline builds. The vendored crates can be used with `cargo build --offline`.
 
 ## ⚙️ Configuration
 
@@ -246,6 +267,9 @@ export OLLAMA_MODELS="mistral:7b-instruct mixtral:8x7b mistral:7b-instruct-q4_K_
 
 # Or single model (backward compatible)
 export OLLAMA_MODEL="mistral:7b-instruct"
+
+# Move models instead of copy (saves disk space, removes originals)
+export MOVE_MODELS=true
 
 # Python requirements file (default: airgap/requirements.txt)
 export PYTHON_REQUIREMENTS="/path/to/requirements.txt"
@@ -314,7 +338,7 @@ cd airgap
 
 ### Adding System Packages
 
-1. Edit `airgap/get_bundle.sh`, find `APT_PACKAGES` array (around line 410)
+1. Edit `airgap/get_bundle.sh`, find `APT_PACKAGES` array (around line 750)
 2. Add your packages:
 
 ```bash
@@ -325,7 +349,7 @@ APT_PACKAGES=(
 )
 ```
 
-1. Re-run on Linux machine to rebuild APT repo
+3. Re-run `get_bundle.sh` on Pop!_OS to rebuild APT repo with new packages
 
 ### Selecting Models
 
@@ -353,31 +377,21 @@ export OLLAMA_MODEL="mistral:7b-instruct"
 ./get_bundle.sh
 ```
 
-## 🔧 APT Repository on macOS
+## 🔧 Build Requirements
 
-If building the bundle on macOS, the APT repository won't be created automatically. You have two options:
+**IMPORTANT**: `get_bundle.sh` **must** be run on a Linux system (Pop!_OS/Ubuntu/Debian) because it:
 
-### Option 1: Build APT Repo on Linux
+1. **Builds APT repository** - Requires `apt-get` and `apt-ftparchive`
+2. **Builds Python packages** - Compiles source distributions into wheels
+3. **Vendors Rust crates** - Requires `cargo` to vendor dependencies
+4. **Pulls Ollama models** - Uses Linux Ollama binary
 
-1. Copy `airgap_bundle/aptrepo/` to a Linux machine
-2. Build the repo:
+The script will exit with an error if run on macOS or other non-Linux systems.
 
-```bash
-cd airgap_bundle/aptrepo
-sudo apt-get update
-sudo apt-get -y --download-only install git build-essential python3-dev ...
-# Copy .deb files from /var/cache/apt/archives/ to pool/
-apt-ftparchive packages pool > Packages
-gzip -kf Packages
-```
-
-### Option 2: Build on Target System
-
-If the target system has temporary internet access:
-
-1. Run `install_offline.sh`
-2. When prompted about missing APT repo, choose to build it
-3. Follow the instructions
+**Workflow**:
+1. Run `get_bundle.sh` on Pop!_OS with internet → builds everything
+2. Copy bundle to airgapped machine
+3. Run `install_offline.sh` on airgapped machine → installs pre-built packages (no building)
 
 ## 🐛 Troubleshooting
 
@@ -387,10 +401,11 @@ If the target system has temporary internet access:
 
 **Solutions**:
 
+- All packages should be pre-built as wheels - if installation fails, the bundle may be incomplete
+- Re-run `get_bundle.sh` on the online Pop!_OS system to rebuild packages
 - Check that system libraries are installed (they should be from APT repo)
-- Verify build tools are installed: `gcc --version`
-- Check Python version: `python3 --version`
-- Some packages may need compilation - this is normal and may take time
+- Verify Python version matches: `python3 --version`
+- If source distributions remain, they should have been built during bundle creation
 
 ### Rust Not Found After Installation
 
@@ -544,22 +559,24 @@ The only requirement is to include the original copyright notice and license tex
 
 ## ⚠️ Important Notes
 
-1. **Bundle Size**: The full bundle with all models is ~35GB. VM bundle is ~55-60GB. Ensure sufficient storage.
+1. **Bundle Creation Requires Linux**: `get_bundle.sh` **must** be run on Pop!_OS/Ubuntu/Debian. It will exit with an error on macOS or other systems because it needs to build APT repos, compile Python packages, and vendor Rust crates.
 
-2. **APT Repo on macOS**: If building on macOS, you'll need to build the APT repo separately on Linux or on the target system.
+2. **Bundle Size**: The full bundle with all models is ~35GB. VM bundle is ~55-60GB. Ensure sufficient storage.
 
-3. **Model Selection**: Choose models based on your GPU VRAM:
+3. **Pre-built Packages**: All Python packages are compiled into wheels during bundle creation. Installation on the airgapped system is fast and requires no compilation.
+
+4. **Model Selection**: Choose models based on your GPU VRAM:
    - 16GB VRAM: Use `mistral:7b-instruct`
    - 24GB+ VRAM: Can use `mixtral:8x7b`
 
-4. **First Run**: The first time you use Ollama, it may take a moment to load the model into GPU memory.
+5. **First Run**: The first time you use Ollama, it may take a moment to load the model into GPU memory.
 
-5. **Airgap Compliance**: This system is designed for true airgapped operation. All components are bundled and verified.
+6. **Airgap Compliance**: This system is designed for true airgapped operation. All components are bundled, pre-built, and verified.
 
-6. **VM Bundle**: The VM bundle includes Pop!_OS installation which requires manual interaction. Plan for ~30-60 minutes for Pop!_OS installation.
+7. **VM Bundle**: The VM bundle includes Pop!_OS installation which requires manual interaction. Plan for ~30-60 minutes for Pop!_OS installation.
 
-7. **KVM Acceleration**: For best VM performance on x86_64 Linux, ensure KVM is enabled (`/dev/kvm` exists and user is in `kvm` group). On macOS, software emulation is used (slower but functional).
+8. **KVM Acceleration**: For best VM performance on x86_64 Linux, ensure KVM is enabled (`/dev/kvm` exists and user is in `kvm` group). On macOS, software emulation is used (slower but functional).
 
-8. **Architecture**: VM bundle always targets x86_64/amd64 architecture. On ARM64 Macs, QEMU will use x86_64 emulation (slower than native but works correctly).
+9. **Architecture**: VM bundle always targets x86_64/amd64 architecture. On ARM64 Macs, QEMU will use x86_64 emulation (slower than native but works correctly).
 
 ---

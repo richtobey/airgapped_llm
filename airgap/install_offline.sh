@@ -15,7 +15,7 @@ if [[ "$OS" != "Linux" ]]; then
   echo "  - .deb package format" >&2
   echo "" >&2
   echo "This script should be run on the target Linux system (e.g., Pop!_OS, Ubuntu, Debian)." >&2
-  echo "Use get_bundle.sh on macOS to create the bundle, then transfer it to Linux." >&2
+  echo "Use get_bundle.sh on Pop!_OS (with internet) to create the bundle, then transfer it to this system." >&2
   exit 1
 fi
 
@@ -30,6 +30,36 @@ sha256_check_file() {
   (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sha_file")")
 }
 
+# Verify VSIX file - Open VSX returns just the hash, so we need to format it
+sha256_check_vsix() {
+  local file="$1"
+  local sha_file="$2"
+  
+  # Read the hash from the file (might be just hash or "hash filename")
+  local expected_hash
+  if [[ -f "$sha_file" ]]; then
+    expected_hash=$(head -n1 "$sha_file" | awk '{print $1}')
+  else
+    return 1
+  fi
+  
+  # Calculate actual hash
+  local actual_hash
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual_hash=$(sha256sum "$file" | awk '{print $1}')
+  else
+    log "ERROR: sha256sum not found"
+    return 1
+  fi
+  
+  # Compare hashes
+  if [[ "$expected_hash" == "$actual_hash" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 # ============
 # 0) Sanity checks
 # ============
@@ -39,9 +69,9 @@ test -d "$BUNDLE_DIR" || { echo "Bundle dir not found: $BUNDLE_DIR"; exit 1; }
 log "Re-verifying downloaded artifacts..."
 sha256_check_file "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz.sha256"
 sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256
-sha256_check_file "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256
-sha256_check_file "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256
-sha256_check_file "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256
+sha256_check_vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256
+sha256_check_vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256
+sha256_check_vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256
 log "All artifact hashes OK."
 
 # ============
@@ -51,26 +81,19 @@ REPO_DIR="$BUNDLE_DIR/aptrepo"
 
 # Check if APT repo was built
 if [[ ! -f "$REPO_DIR/Packages.gz" ]] && [[ ! -f "$REPO_DIR/Packages" ]]; then
-  log "WARNING: APT repo not found or not built."
-  log "The bundle was likely created on macOS (which can't build APT repos)."
+  log "ERROR: APT repo not found or not built."
+  log "The bundle must be created on Pop!_OS with internet access using get_bundle.sh"
+  log "which builds the APT repository automatically."
   log ""
-  log "Options:"
-  log "  1. Build the APT repo now (requires internet):"
-  log "     cd $REPO_DIR"
-  log "     sudo apt-get update"
-  log "     sudo apt-get -y --download-only install git build-essential python3-dev python3-pip rustup-init"
-  log "     # Copy .deb files from /var/cache/apt/archives/ to $REPO_DIR/pool/"
-  log "     apt-ftparchive packages pool > Packages && gzip -kf Packages"
+  log "If you have temporary internet access, you can build it now:"
+  log "  1. cd $REPO_DIR"
+  log "  2. sudo apt-get update"
+  log "  3. sudo apt-get -y --download-only install <packages>"
+  log "  4. Copy .deb files from /var/cache/apt/archives/ to $REPO_DIR/pool/"
+  log "  5. apt-ftparchive packages pool > Packages && gzip -kf Packages"
   log ""
-  log "  2. Skip APT repo setup if packages are already installed"
-  log ""
-  read -p "Skip APT repo setup? (y/n) " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    log "Please build the APT repo manually and re-run this script."
-    exit 1
-  fi
-  log "Skipping APT repo setup..."
+  log "Otherwise, please re-create the bundle on a Pop!_OS system with internet."
+  exit 1
 else
   log "Configuring local offline APT repo..."
   # Add a local file:// repo (no network)
@@ -341,18 +364,19 @@ if [[ -d "$BUNDLE_DIR/python" ]] && [[ -n "$(ls -A "$BUNDLE_DIR/python" 2>/dev/n
     fi
     
     # If there's a requirements.txt, install from it (preferred method)
+    # All packages should be pre-built as wheels, so installation should be fast
     if [[ -f "$BUNDLE_DIR/python/requirements.txt" ]]; then
-      log "Installing from requirements.txt (this may take a while)..."
+      log "Installing from requirements.txt (all packages are pre-built)..."
       $PIP_CMD install --no-index --find-links "$BUNDLE_DIR/python" -r "$BUNDLE_DIR/python/requirements.txt" || {
         log "WARNING: Some packages from requirements.txt failed to install."
-        log "This may be normal if some packages are source distributions that need compilation."
+        log "This should not happen as all packages were pre-built. Check for missing dependencies."
       }
     else
-      # Fallback: try to install all wheel/tar.gz files
-      log "No requirements.txt found. Attempting to install all packages in bundle..."
-      log "Note: This may not install dependencies correctly. Use requirements.txt for best results."
+      # Fallback: try to install all wheel files (pre-built packages)
+      log "No requirements.txt found. Installing all pre-built wheels..."
+      log "Note: Only wheels will be installed (source distributions should have been built during bundle creation)."
       $PIP_CMD install --no-index --find-links "$BUNDLE_DIR/python" \
-        $(find "$BUNDLE_DIR/python" -maxdepth 1 \( -name "*.whl" -o -name "*.tar.gz" \) -type f -exec basename {} \; | sed 's/-.*//' | sort -u | head -20) \
+        $(find "$BUNDLE_DIR/python" -maxdepth 1 -name "*.whl" -type f -exec basename {} \;) \
         || log "WARNING: Package installation had some failures."
     fi
     

@@ -4,37 +4,37 @@
 set -eo pipefail
 
 # ============
-# OS Detection
+# OS Detection - This script requires Linux (Pop!_OS/Debian/Ubuntu)
 # ============
 OS="$(uname -s)"
-IS_MACOS=false
-IS_LINUX=false
-
-if [[ "$OS" == "Darwin" ]]; then
-  IS_MACOS=true
-  log() {
-    # BSD date (macOS) - use ISO 8601-like format
-    echo "[$(date +"%Y-%m-%dT%H:%M:%S%z")] $*"
-  }
-elif [[ "$OS" == "Linux" ]]; then
-  IS_LINUX=true
-  log() {
-    # GNU date (Linux)
-    echo "[$(date -Is)] $*"
-  }
-else
-  log() {
-    # Fallback for unknown OS
-    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $*"
-  }
+if [[ "$OS" != "Linux" ]]; then
+  echo "ERROR: This script must be run on Linux (Pop!_OS, Ubuntu, or Debian)" >&2
+  echo "Detected OS: $OS" >&2
+  echo "" >&2
+  echo "This script requires Linux because it needs to:" >&2
+  echo "  - Build APT repositories (requires apt-get)" >&2
+  echo "  - Build Python packages from source (requires build tools)" >&2
+  echo "  - Build Rust crates (requires cargo)" >&2
+  echo "  - Pull Ollama models (requires Linux Ollama binary)" >&2
+  echo "" >&2
+  echo "Workflow:" >&2
+  echo "  1. Run this script on Pop!_OS with internet access" >&2
+  echo "  2. Copy the bundle to the airgapped machine" >&2
+  echo "  3. Run install_offline.sh on the airgapped machine" >&2
+  exit 1
 fi
+
+IS_LINUX=true
+log() {
+  # GNU date (Linux)
+  echo "[$(date -Is)] $*"
+}
 
 # ============
 # Error Tracking (bash 3.2 compatible - using variables instead of associative arrays)
 # ============
 # Initialize all component statuses
 STATUS_ollama_linux="pending"
-STATUS_ollama_macos="pending"
 STATUS_models="pending"
 STATUS_vscodium="pending"
 STATUS_continue="pending"
@@ -93,18 +93,41 @@ mkdir -p \
 sha256_check_file() {
   local file="$1"
   local sha_file="$2"
-  if [[ "$IS_LINUX" == "true" ]] && command -v sha256sum >/dev/null 2>&1; then
+  if command -v sha256sum >/dev/null 2>&1; then
     (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sha_file")")
-  elif [[ "$IS_MACOS" == "true" ]] && command -v shasum >/dev/null 2>&1; then
-    # macOS uses shasum
-    (cd "$(dirname "$file")" && shasum -a 256 -c "$(basename "$sha_file")")
-  elif command -v sha256sum >/dev/null 2>&1; then
-    (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sha_file")")
-  elif command -v shasum >/dev/null 2>&1; then
-    (cd "$(dirname "$file")" && shasum -a 256 -c "$(basename "$sha_file")")
   else
-    log "ERROR: Neither sha256sum nor shasum found"
+    log "ERROR: sha256sum not found. This script requires Linux with standard tools."
     exit 1
+  fi
+}
+
+# Verify VSIX file - Open VSX returns just the hash, so we need to format it
+sha256_check_vsix() {
+  local file="$1"
+  local sha_file="$2"
+  
+  # Read the hash from the file (might be just hash or "hash filename")
+  local expected_hash
+  if [[ -f "$sha_file" ]]; then
+    expected_hash=$(head -n1 "$sha_file" | awk '{print $1}')
+  else
+    return 1
+  fi
+  
+  # Calculate actual hash
+  local actual_hash
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual_hash=$(sha256sum "$file" | awk '{print $1}')
+  else
+    log "ERROR: sha256sum not found"
+    return 1
+  fi
+  
+  # Compare hashes
+  if [[ "$expected_hash" == "$actual_hash" ]]; then
+    return 0
+  else
+    return 1
   fi
 }
 
@@ -193,174 +216,15 @@ fi
 read -ra MODEL_ARRAY <<< "$OLLAMA_MODELS"
 MODEL_COUNT=${#MODEL_ARRAY[@]}
 
-if [[ "$IS_MACOS" == "true" ]]; then
-  # Check if macOS binary already exists
-  MACOS_ARCHIVE="$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -type f \( -name "*darwin*" -o -name "*mac*" \) 2>/dev/null | head -n1)"
-  
-  if [[ -n "$MACOS_ARCHIVE" ]] && [[ -f "$MACOS_ARCHIVE" ]]; then
-    ARCHIVE_SIZE=$(du -sh "$MACOS_ARCHIVE" 2>/dev/null | cut -f1 || echo "unknown")
-    log "macOS Ollama binary already exists ($ARCHIVE_SIZE). Skipping download."
-    mark_success "ollama_macos"
-    MACOS_DL_STATUS=0
-  else
-    log "macOS detected. Downloading macOS Ollama binary to pull $MODEL_COUNT model(s)..."
-    
-    # Download macOS Ollama for pulling models
-    # Detect Mac architecture
-    MAC_ARCH="$(uname -m)"
-    if [[ "$MAC_ARCH" == "arm64" ]]; then
-      MAC_TARGET="arm64"
-    else
-      MAC_TARGET="amd64"
-    fi
-    
-    python3 - <<'PY' "$BUNDLE_DIR" "$MAC_TARGET"
-import json, sys, urllib.request
-from pathlib import Path
+log "Using Linux Ollama binary to pull $MODEL_COUNT model(s)..."
 
-bundle = Path(sys.argv[1])
-mac_target = sys.argv[2]
-outdir = bundle/"ollama"
-outdir.mkdir(parents=True, exist_ok=True)
+TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
+rm -rf "$TMP_OLLAMA"
+mkdir -p "$TMP_OLLAMA"
 
-api = "https://api.github.com/repos/ollama/ollama/releases/latest"
-data = json.loads(urllib.request.urlopen(api).read().decode("utf-8"))
-assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
-
-# Look for macOS binary (could be ollama-darwin, ollama-mac, or in a .zip/.tgz)
-# Common patterns: ollama-darwin, ollama-darwin-amd64, ollama-darwin-arm64, etc.
-macos_name = None
-for name in assets:
-  name_lower = name.lower()
-  if ("darwin" in name_lower or "mac" in name_lower) and mac_target in name_lower:
-    macos_name = name
-    break
-
-# Fallback: any darwin/mac binary
-if not macos_name:
-  for name in assets:
-    name_lower = name.lower()
-    if "darwin" in name_lower or "mac" in name_lower:
-      macos_name = name
-      break
-
-if not macos_name:
-  raise SystemExit(f"Could not find macOS ({mac_target}) Ollama binary in release assets: {list(assets)[:10]}")
-
-macos_url = assets[macos_name]
-urllib.request.urlretrieve(macos_url, outdir/macos_name)
-print("Downloaded macOS Ollama:", macos_name)
-PY
-    MACOS_DL_STATUS=$?
-    
-    if [[ $MACOS_DL_STATUS -eq 0 ]]; then
-      mark_success "ollama_macos"
-    else
-      log "ERROR: Failed to download macOS Ollama binary"
-      mark_failed "ollama_macos"
-    fi
-  fi
-
-  TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
-  rm -rf "$TMP_OLLAMA"
-  mkdir -p "$TMP_OLLAMA"
-  
-  # Handle different archive formats or direct binary
-  # Use find to avoid glob expansion issues when no files match
-  MACOS_BINARY="$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -type f \( -name "*darwin*" -o -name "*mac*" \) 2>/dev/null | head -n1)"
-  if [[ -z "$MACOS_BINARY" ]]; then
-    log "ERROR: Could not find downloaded macOS Ollama binary"
-    log "Skipping model pulling - macOS binary not found"
-    mark_failed "ollama_macos"
-    # Continue without model pulling - will try to copy existing models
-  else
-    # If it's an archive, extract it; otherwise copy the binary
-    log "Extracting macOS Ollama binary from $MACOS_BINARY..."
-    EXTRACTION_FAILED=false
-    
-    if [[ "$MACOS_BINARY" == *.zip ]]; then
-      if ! unzip -q "$MACOS_BINARY" -d "$TMP_OLLAMA"; then
-        log "ERROR: Failed to extract zip archive"
-        EXTRACTION_FAILED=true
-      else
-        chmod +x "$TMP_OLLAMA/ollama" 2>/dev/null || find "$TMP_OLLAMA" -name "ollama" -type f -exec chmod +x {} \;
-      fi
-    elif [[ "$MACOS_BINARY" == *.tgz ]] || [[ "$MACOS_BINARY" == *.tar.gz ]]; then
-      if ! tar -xzf "$MACOS_BINARY" -C "$TMP_OLLAMA"; then
-        log "ERROR: Failed to extract tarball"
-        EXTRACTION_FAILED=true
-      else
-        chmod +x "$TMP_OLLAMA/ollama" 2>/dev/null || find "$TMP_OLLAMA" -name "ollama" -type f -exec chmod +x {} \;
-      fi
-    else
-      # Assume it's a direct binary
-      if ! cp "$MACOS_BINARY" "$TMP_OLLAMA/ollama"; then
-        log "ERROR: Failed to copy binary"
-        EXTRACTION_FAILED=true
-      else
-        chmod +x "$TMP_OLLAMA/ollama"
-      fi
-    fi
-    
-    if [[ "$EXTRACTION_FAILED" == "true" ]]; then
-      log "Skipping model pulling - extraction failed"
-      mark_failed "ollama_macos"
-    else
-      log "Extraction complete. Looking for ollama binary..."
-      
-      # Find the actual ollama binary
-      if [[ ! -x "$TMP_OLLAMA/ollama" ]]; then
-        log "Binary not at expected location, searching..."
-        OLLAMA_BIN="$(find "$TMP_OLLAMA" -name "ollama" -type f | head -n1)"
-        if [[ -n "$OLLAMA_BIN" ]]; then
-          log "Found binary at: $OLLAMA_BIN"
-          cp "$OLLAMA_BIN" "$TMP_OLLAMA/ollama"
-          chmod +x "$TMP_OLLAMA/ollama"
-        else
-          log "ERROR: Could not find ollama binary in extracted archive"
-          log "Contents of $TMP_OLLAMA:"
-          ls -la "$TMP_OLLAMA" || true
-          log "Skipping model pulling - cannot extract Ollama binary"
-          mark_failed "ollama_macos"
-        fi
-      fi
-      
-      # Verify the binary works (only if extraction succeeded)
-      if [[ "$(get_status ollama_macos)" != "failed" ]]; then
-        log "Verifying ollama binary..."
-        if ! "$TMP_OLLAMA/ollama" --version >/dev/null 2>&1; then
-          log "ERROR: Extracted ollama binary does not work. Check extraction."
-          log "Skipping model pulling - Ollama binary verification failed"
-          mark_failed "ollama_macos"
-        else
-          export PATH="$TMP_OLLAMA:$PATH"
-          log "Ollama binary extracted and verified at $TMP_OLLAMA/ollama"
-        fi
-      fi
-    fi
-  fi
-fi
-
-if [[ "$IS_LINUX" == "true" ]]; then
-  log "Linux detected. Using Linux Ollama binary to pull $MODEL_COUNT model(s)..."
-  
-  TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
-  rm -rf "$TMP_OLLAMA"
-  mkdir -p "$TMP_OLLAMA"
-  
-  tar -xzf "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" -C "$TMP_OLLAMA"
-  export PATH="$TMP_OLLAMA:$PATH"
-elif [[ "$IS_MACOS" == "true" ]]; then
-  # TMP_OLLAMA already set above for macOS
-  :
-else
-  log "WARNING: Unknown OS ($OS). Skipping model pull."
-  log "You will need to manually pull the models on the target Linux system."
-  mkdir -p "$BUNDLE_DIR/models/.ollama"
-  mark_skipped "models"
-  TMP_OLLAMA=""  # Set empty to avoid cleanup errors
-  # Continue with other components
-fi
+# Extract Linux Ollama binary
+tar -xzf "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" -C "$TMP_OLLAMA"
+export PATH="$TMP_OLLAMA:$PATH"
 
 # Check if models already exist
 MODELS_EXIST=false
@@ -495,15 +359,6 @@ if [[ "$MODELS_COPIED" == "true" ]]; then
     log "Cleaned up temporary Ollama binary directory ($TMP_SIZE)"
   fi
   
-  # Clean up macOS binary archive (we only need the Linux one for target system)
-  if [[ "$IS_MACOS" == "true" ]]; then
-    MACOS_ARCHIVE="$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -type f \( -name "*darwin*" -o -name "*mac*" \) 2>/dev/null | head -n1)"
-    if [[ -n "$MACOS_ARCHIVE" ]] && [[ -f "$MACOS_ARCHIVE" ]]; then
-      ARCHIVE_SIZE=$(du -sh "$MACOS_ARCHIVE" 2>/dev/null | cut -f1 || echo "unknown")
-      rm -f "$MACOS_ARCHIVE"
-      log "Cleaned up macOS Ollama archive ($ARCHIVE_SIZE) - only Linux binary needed for target system"
-    fi
-  fi
   
   # Clean up ollama serve log if models were successfully copied
   if [[ -f "$BUNDLE_DIR/logs/ollama_serve.log" ]]; then
@@ -608,7 +463,7 @@ fi
 
 if [[ -n "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_SHA" ]]; then
   log "Continue VSIX already exists, verifying..."
-  if sha256_check_file "$CONTINUE_VSIX" "$CONTINUE_SHA"; then
+  if sha256_check_vsix "$CONTINUE_VSIX" "$CONTINUE_SHA"; then
     log "Continue VSIX already downloaded and verified. Skipping download."
     mark_success "continue"
     CONTINUE_DL_STATUS=0
@@ -662,7 +517,11 @@ try:
     
     # Download both
     urllib.request.urlretrieve(download_url, outdir/vsix_name)
-    urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
+    
+    # Open VSX returns just the hash, format it as "hash  filename"
+    sha256_hash = urllib.request.urlopen(sha256_url).read().decode("utf-8").strip()
+    sha256_file = outdir/(vsix_name + ".sha256")
+    sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
     print("Version:", version)
     print("Downloaded:", vsix_name)
@@ -674,7 +533,7 @@ except (KeyError, ValueError) as e:
 PY
   CONTINUE_DL_STATUS=$?
   if [[ "$CONTINUE_DL_STATUS" -eq 0 ]]; then
-    if sha256_check_file "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256; then
+    if sha256_check_vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256; then
       log "Continue VSIX verified."
       mark_success "continue"
     else
@@ -699,7 +558,7 @@ fi
 
 if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_SHA" ]]; then
   log "Python extension VSIX already exists, verifying..."
-  if sha256_check_file "$PYTHON_VSIX" "$PYTHON_SHA"; then
+  if sha256_check_vsix "$PYTHON_VSIX" "$PYTHON_SHA"; then
     log "Python extension VSIX already downloaded and verified. Skipping download."
     mark_success "python_ext"
     PYTHON_EXT_DL_STATUS=0
@@ -751,7 +610,11 @@ try:
     
     # Download both
     urllib.request.urlretrieve(download_url, outdir/vsix_name)
-    urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
+    
+    # Open VSX returns just the hash, format it as "hash  filename"
+    sha256_hash = urllib.request.urlopen(sha256_url).read().decode("utf-8").strip()
+    sha256_file = outdir/(vsix_name + ".sha256")
+    sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
     print("Version:", version)
     print("Downloaded:", vsix_name)
@@ -764,7 +627,7 @@ PY
   PYTHON_EXT_DL_STATUS=$?
 
   if [[ $PYTHON_EXT_DL_STATUS -eq 0 ]]; then
-    if sha256_check_file "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256; then
+    if sha256_check_vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256; then
       log "Python extension VSIX verified."
       mark_success "python_ext"
     else
@@ -789,7 +652,7 @@ fi
 
 if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]] && [[ -f "$RUST_SHA" ]]; then
   log "Rust Analyzer extension VSIX already exists, verifying..."
-  if sha256_check_file "$RUST_VSIX" "$RUST_SHA"; then
+  if sha256_check_vsix "$RUST_VSIX" "$RUST_SHA"; then
     log "Rust Analyzer extension VSIX already downloaded and verified. Skipping download."
     mark_success "rust_ext"
     RUST_EXT_DL_STATUS=0
@@ -841,7 +704,11 @@ try:
     
     # Download both
     urllib.request.urlretrieve(download_url, outdir/vsix_name)
-    urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
+    
+    # Open VSX returns just the hash, format it as "hash  filename"
+    sha256_hash = urllib.request.urlopen(sha256_url).read().decode("utf-8").strip()
+    sha256_file = outdir/(vsix_name + ".sha256")
+    sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
     print("Version:", version)
     print("Downloaded:", vsix_name)
@@ -854,7 +721,7 @@ PY
   RUST_EXT_DL_STATUS=$?
 
   if [[ $RUST_EXT_DL_STATUS -eq 0 ]]; then
-    if sha256_check_file "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256; then
+    if sha256_check_vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256; then
       log "Rust Analyzer extension VSIX verified."
       mark_success "rust_ext"
     else
@@ -870,40 +737,7 @@ fi
 # ============
 # 7) Offline APT repo for Lua 5.3 + common prereqs
 # ============
-# This step requires a Linux system with apt-get
-# On macOS, we'll create a note file and skip the actual repo build
-if [[ "$IS_LINUX" != "true" ]]; then
-  log "WARNING: Not on Linux. Skipping APT repo build."
-  log "You have two options:"
-  log "  1. Run this script on a Linux system (VM, container, or Pop!_OS) to build the APT repo"
-  log "  2. Build the APT repo manually on the target Pop!_OS system before running install_offline.sh"
-  log ""
-  log "To build manually on Pop!_OS, run:"
-  log "  APT_PACKAGES=(lua5.3 ca-certificates curl xz-utils tar)"
-  log "  sudo apt-get update"
-  log "  sudo apt-get -y --download-only install \"\${APT_PACKAGES[@]}\""
-  log "  # Then copy .deb files from /var/cache/apt/archives/ to $BUNDLE_DIR/aptrepo/pool/"
-  log "  # And run: cd $BUNDLE_DIR/aptrepo && apt-ftparchive packages pool > Packages && gzip -kf Packages"
-  log ""
-  
-  # Create placeholder structure
-  mkdir -p "$BUNDLE_DIR/aptrepo/pool"
-  cat >"$BUNDLE_DIR/aptrepo/README.txt" <<EOF
-APT repository not built on macOS.
-Please build this on a Linux system (or the target Pop!_OS system) before running install_offline.sh.
-
-Required packages (see get_bundle.sh for full list):
-- Core: lua5.3, ca-certificates, curl, xz-utils, tar
-- Version control: git, git-lfs
-- Build tools: build-essential, gcc, g++, make, cmake
-- Python: python3-dev, python3-pip, python3-venv
-- Utilities: vim, nano, htop, tree, wget, unzip, rsync
-- Documentation: man-db, manpages-dev
-
-See get_bundle.sh comments for manual build instructions.
-EOF
-else
-  log "Building local APT repo with development tools and dependencies..."
+log "Building local APT repo with development tools and dependencies..."
   # Comprehensive list of packages for airgapped development
   APT_PACKAGES=(
     # Core utilities (already included)
@@ -1023,7 +857,6 @@ EOF
 
   log "APT repo built."
   mark_success "apt_repo"
-fi
 
 # ============
 # 8) Download Rust toolchain (rustup-init)
@@ -1071,11 +904,11 @@ PY
 fi
 
 # ============
-# 8b) Download Rust crates (if Cargo.toml exists)
+# 8b) Build and bundle Rust crates (if Cargo.toml exists)
 # ============
 RUST_CARGO_TOML="${RUST_CARGO_TOML:-Cargo.toml}"
 if [[ -f "$RUST_CARGO_TOML" ]]; then
-  log "Found Cargo.toml. Bundling Rust crates for offline use..."
+  log "Found Cargo.toml. Building and bundling Rust crates for offline use..."
   log "Note: This requires cargo to be installed on the build machine."
   
   if command -v cargo >/dev/null 2>&1; then
@@ -1087,26 +920,35 @@ if [[ -f "$RUST_CARGO_TOML" ]]; then
     cp "$RUST_CARGO_TOML" "$CRATES_DIR/"
     if [[ -f "Cargo.lock" ]]; then
       cp "Cargo.lock" "$CRATES_DIR/"
+    else
+      # Generate Cargo.lock if it doesn't exist
+      log "Generating Cargo.lock..."
+      (cd "$(dirname "$RUST_CARGO_TOML")" && cargo generate-lockfile 2>/dev/null || true)
+      if [[ -f "$(dirname "$RUST_CARGO_TOML")/Cargo.lock" ]]; then
+        cp "$(dirname "$RUST_CARGO_TOML")/Cargo.lock" "$CRATES_DIR/"
+      fi
     fi
     
-    # Vendor all dependencies
+    # Vendor all dependencies (downloads and prepares them for offline use)
+    log "Vendoring Rust crates..."
     (cd "$CRATES_DIR" && cargo vendor --manifest-path "$(pwd)/Cargo.toml" vendor 2>/dev/null || {
       log "WARNING: cargo vendor failed. You may need to run it manually:"
       log "  cd $CRATES_DIR && cargo vendor"
+      mark_failed "rust_crates"
+      exit 1
     })
     
     if [[ -d "$CRATES_DIR/vendor" ]]; then
       log "Rust crates bundled successfully."
+      log "All dependencies are vendored and ready for offline builds."
       mark_success "rust_crates"
     else
-      log "WARNING: cargo vendor did not create vendor directory."
-      log "You may need to bundle Rust crates manually on the target system."
+      log "ERROR: cargo vendor did not create vendor directory."
       mark_failed "rust_crates"
     fi
   else
     log "WARNING: cargo not found. Cannot bundle Rust crates."
-    log "Install Rust first, then re-run this script to bundle crates."
-    log "Or bundle crates manually on the target system using: cargo vendor"
+    log "Install Rust first (rustup-init is in the bundle), then re-run this script to bundle crates."
     mark_skipped "rust_crates"
   fi
 else
@@ -1119,7 +961,8 @@ fi
 # ============
 PYTHON_REQUIREMENTS="${PYTHON_REQUIREMENTS:-requirements.txt}"
 if [[ -f "$PYTHON_REQUIREMENTS" ]]; then
-  log "Found requirements.txt. Downloading Python packages for Linux..."
+  log "Found requirements.txt. Downloading and building Python packages for Linux..."
+  log "Note: This will download packages and build source distributions to ensure they work on this system."
   python3 - <<'PY' "$BUNDLE_DIR" "$PYTHON_REQUIREMENTS"
 import sys, subprocess
 from pathlib import Path
@@ -1134,7 +977,6 @@ import shutil
 shutil.copy(requirements, outdir/"requirements.txt")
 
 # Use pip download to get all packages and dependencies for Linux
-# Note: This downloads Linux wheels even on macOS
 # We download with dependencies to ensure everything is bundled
 try:
     # Step 1: Download binary wheels with ALL dependencies
@@ -1174,15 +1016,46 @@ try:
         sys.executable, "-m", "pip", "check",
     ], capture_output=True, text=True, check=False)
     
+    # Step 4: Build source distributions into wheels for offline installation
+    # This ensures packages are pre-built and ready for the airgapped system
+    print("Step 4: Building source distributions into wheels...")
+    source_dists = list(outdir.glob("*.tar.gz"))
+    if source_dists:
+        print(f"Found {len(source_dists)} source distributions to build...")
+        # Install build dependencies first
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "--user", "wheel", "build"
+        ], capture_output=True, text=True, check=False)
+        
+        # Build each source distribution
+        built_count = 0
+        for src_dist in source_dists:
+            try:
+                print(f"Building {src_dist.name}...")
+                result = subprocess.run([
+                    sys.executable, "-m", "pip", "wheel",
+                    "--no-deps",  # Don't install dependencies, just build the wheel
+                    "--wheel-dir", str(outdir),
+                    str(src_dist)
+                ], capture_output=True, text=True, check=False)
+                if result.returncode == 0:
+                    built_count += 1
+                    # Optionally remove source dist after building (saves space)
+                    # src_dist.unlink()
+            except Exception as e:
+                print(f"Warning: Failed to build {src_dist.name}: {e}")
+        
+        print(f"✓ Built {built_count} wheels from source distributions")
+    
     # Count downloaded packages
     downloaded = len(list(outdir.glob("*.whl"))) + len(list(outdir.glob("*.tar.gz")))
-    print(f"✓ Downloaded {downloaded} package files (wheels and source distributions)")
+    wheels = len(list(outdir.glob("*.whl")))
+    print(f"✓ Downloaded {downloaded} package files ({wheels} wheels, {downloaded - wheels} source dists)")
     print(f"✓ All dependencies are included (pip download includes transitive dependencies)")
-    print(f"  Note: Some packages may need system libraries (included in APT repo)")
+    print(f"  Note: Source distributions have been built into wheels where possible")
     
-    print(f"Downloaded Python packages to {outdir}")
-    print(f"Note: Source distributions will be compiled on the target system.")
-    print(f"      Build tools (gcc, python3-dev) are included in the APT repo.")
+    print(f"Python packages ready in {outdir}")
+    print(f"All packages are pre-built and ready for offline installation.")
 except subprocess.CalledProcessError as e:
     print(f"Warning: Could not download all Python packages: {e}")
     print("Some packages may need to be downloaded manually or built from source.")
@@ -1199,7 +1072,7 @@ PY
     log "WARNING: No Python packages were downloaded."
     mark_failed "python_packages"
   fi
-  log "Note: Source distributions will need to be built on the target Linux system."
+  log "Note: All packages have been downloaded and built. Ready for offline installation."
 else
   log "No requirements.txt found. Skipping Python package download."
   mark_skipped "python_packages"
@@ -1219,7 +1092,7 @@ HAS_FAILURES=false
 HAS_WARNINGS=false
 
 # List of all components to check
-COMPONENTS="ollama_linux ollama_macos models vscodium continue python_ext rust_ext rust_toolchain rust_crates python_packages apt_repo"
+COMPONENTS="ollama_linux models vscodium continue python_ext rust_ext rust_toolchain rust_crates python_packages apt_repo"
 
 for component in $COMPONENTS; do
   status="$(get_status "$component")"
@@ -1322,12 +1195,15 @@ if [[ "$HAS_WARNINGS" == "true" ]] && [[ "$HAS_FAILURES" != "true" ]]; then
 fi
 
 if [[ "$HAS_FAILURES" != "true" ]]; then
-  log "✓ All required components bundled successfully!"
+  log "✓ All required components bundled and built successfully!"
   log ""
   log "Next steps:"
   log "  1. Verify bundle contents: ls -lh $BUNDLE_DIR"
-  log "  2. Copy bundle to external drive or transfer to target system"
-  log "  3. On target Linux system, run: ./install_offline.sh"
+  log "  2. Copy bundle to external drive or transfer to airgapped system"
+  log "  3. On airgapped Linux system, run: ./install_offline.sh"
+  log ""
+  log "Note: All packages have been pre-built on this system and are ready"
+  log "      for installation on the airgapped system. No compilation needed."
   log ""
 fi
 

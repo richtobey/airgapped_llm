@@ -121,11 +121,27 @@ Alternatively, download from: https://mac.getutm.app/
 4. After installation, the VM will reboot
 5. Log in with the account you created.  Stop it and remove the iso and then reboot it.
 
-### Step 5: Get Remote Resources to Install Locally on Air Gapped Computer
+### Step 5: Create Airgap Bundle (Inside VM or on Physical Pop!_OS)
 
-1. From Mac OS, run `./get_gundle.sh`.
+**IMPORTANT**: `get_bundle.sh` must be run on Pop!_OS Linux, not macOS.
 
-### Step 6: Transfer Airgap Bundle to VM
+**Option A: Run inside the VM (if VM has internet access)**
+```bash
+# Inside the Pop!_OS VM
+cd /path/to/airgapped_llm/airgap
+./get_bundle.sh
+```
+
+**Option B: Run on physical Pop!_OS machine**
+```bash
+# On physical Pop!_OS machine with internet
+cd /path/to/airgapped_llm/airgap
+./get_bundle.sh
+```
+
+The bundle will be created in `./airgap_bundle/` with all components pre-built.
+
+### Step 6: Transfer Airgap Bundle to VM (if created elsewhere)
 
 **Option A: UTM Shared Folder (Easiest)**
 
@@ -134,7 +150,7 @@ Alternatively, download from: https://mac.getutm.app/
 3. Enable "Directory Sharing" and select a folder on your Mac
 4. In Pop!_OS, the shared folder appears at `/mnt/utm-shared`
 
-### Step 6: Install Airgap Bundle
+### Step 7: Install Airgap Bundle
 
 ```bash
 cd /path/to/airgap_bundle
