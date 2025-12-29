@@ -1,31 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Cleanup script to remove VM and related files created by setup_mac_vm.sh
-# Usage: ./cleanup_mac_vm.sh [--remove-qemu] [--force]
+# Cleanup script to remove downloaded ISO and related files created by setup_mac_vm.sh
+# Usage: ./cleanup_mac_vm.sh [--force]
 
 # ============
 # Config
 # ============
 VM_DIR="${VM_DIR:-$HOME/vm-popos}"
-REMOVE_QEMU="${REMOVE_QEMU:-false}"
 FORCE="${FORCE:-false}"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --remove-qemu)
-      REMOVE_QEMU="true"
-      shift
-      ;;
     --force)
       FORCE="true"
       shift
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--remove-qemu] [--force]"
-      echo "  --remove-qemu  Also remove QEMU installed via Homebrew"
+      echo "Usage: $0 [--force]"
       echo "  --force        Skip confirmation prompts"
       exit 1
       ;;
@@ -50,13 +44,14 @@ log() {
 # ============
 if [[ "$FORCE" != "true" ]]; then
   echo "This will remove:"
-  echo "  - VM disk, logs, and scripts"
+  echo "  - Downloaded Pop!_OS ISO"
+  echo "  - VM directory: $VM_DIR"
   if [[ -d "$VM_DIR" ]] && [[ -f "$VM_DIR/iso/pop-os.iso" ]]; then
     echo "  - Note: Valid Pop!_OS ISO will be preserved if checksum verifies"
   fi
-  if [[ "$REMOVE_QEMU" == "true" ]]; then
-    echo "  - QEMU installation (via Homebrew)"
-  fi
+  echo ""
+  echo "Note: This only removes downloaded files. UTM VMs are stored separately"
+  echo "      and will not be affected by this cleanup."
   echo ""
   read -p "Are you sure you want to continue? (yes/no) " -r
   echo
@@ -76,32 +71,6 @@ PRESERVE_ISO="false"
 
 if [[ -d "$VM_DIR" ]]; then
   log "Found VM directory: $VM_DIR"
-  
-  # Check if VM is running (look for QEMU processes using the disk)
-  VM_DISK="$VM_DIR/disk/popos-airgap.qcow2"
-  if [[ -f "$VM_DISK" ]]; then
-    # Check for running QEMU processes
-    if pgrep -f "qemu.*$(basename "$VM_DISK")" >/dev/null 2>&1; then
-      log "WARNING: VM appears to be running!"
-      if [[ "$FORCE" != "true" ]]; then
-        read -p "VM is running. Stop it first? (yes/no) " -r
-        echo
-        if [[ $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
-          log "Stopping QEMU processes..."
-          pkill -f "qemu.*$(basename "$VM_DISK")" || true
-          sleep 2
-        else
-          log "ERROR: Cannot remove VM directory while VM is running."
-          log "Please stop the VM first, or use --force to skip this check."
-          exit 1
-        fi
-      else
-        log "Force mode: Attempting to stop QEMU processes..."
-        pkill -f "qemu.*$(basename "$VM_DISK")" || true
-        sleep 2
-      fi
-    fi
-  fi
   
   # Check if Pop!_OS ISO exists and should be preserved
   POPOS_ISO="$VM_DIR/iso/pop-os.iso"
@@ -177,46 +146,6 @@ else
 fi
 
 # ============
-# 2) Remove QEMU (optional)
-# ============
-if [[ "$REMOVE_QEMU" == "true" ]]; then
-  log "Removing QEMU installation..."
-  
-  if ! command -v brew >/dev/null 2>&1; then
-    log "Homebrew not found. Skipping QEMU removal."
-  else
-    # Check if QEMU is installed
-    if brew list qemu >/dev/null 2>&1; then
-      log "Found QEMU installation via Homebrew"
-      
-      if [[ "$FORCE" != "true" ]]; then
-        echo ""
-        echo "WARNING: This will remove QEMU, which may be used by other VMs or projects."
-        read -p "Remove QEMU? (yes/no) " -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
-          log "Skipping QEMU removal."
-        else
-          brew uninstall qemu || {
-            log "WARNING: Failed to uninstall QEMU. You may need to remove it manually."
-          }
-          log "✓ Removed QEMU"
-        fi
-      else
-        brew uninstall qemu || {
-          log "WARNING: Failed to uninstall QEMU. You may need to remove it manually."
-        }
-        log "✓ Removed QEMU"
-      fi
-    else
-      log "QEMU not installed via Homebrew (nothing to remove)"
-    fi
-  fi
-else
-  log "Skipping QEMU removal (use --remove-qemu to remove it)"
-fi
-
-# ============
 # Summary
 # ============
 log ""
@@ -226,15 +155,15 @@ log "=========================================="
 log ""
 log "Removed:"
 if [[ "$PRESERVE_ISO" == "true" ]]; then
-  log "  - VM disk, logs, and scripts"
+  log "  - Other files in VM directory"
   log "  - Preserved valid Pop!_OS ISO: $VM_DIR/iso/pop-os.iso"
 else
   log "  - VM directory: $VM_DIR"
 fi
-if [[ "$REMOVE_QEMU" == "true" ]]; then
-  log "  - QEMU installation"
-fi
 log ""
-log "To recreate the VM, run: ./setup_mac_vm.sh"
+log "Note: UTM VMs are stored separately and were not affected."
+log "      To remove UTM VMs, delete them from within UTM."
+log ""
+log "To download the ISO again, run: ./setup_mac_vm.sh"
 log ""
 
