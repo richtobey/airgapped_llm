@@ -38,7 +38,7 @@ airgapped_llm/
 │   │   └── SYSTEM_LIBRARIES.md
 │   ├── airgap_bundle/  # Generated bundle directory (created by get_bundle.sh)
 │   └── README.md
-├── mac/                 # Mac testing scripts
+├── mac_vm/              # Mac VM testing scripts
 │   ├── setup_mac_vm.sh  # Setup QEMU/VM on macOS for testing
 │   ├── cleanup_mac_vm.sh # Remove VM and cleanup
 │   └── README.md
@@ -157,8 +157,8 @@ Set up a Pop!_OS VM on macOS to test airgap scripts before deploying to producti
 #### Step 1: Setup VM on macOS
 
 ```bash
-# Navigate to mac scripts directory
-cd mac
+# Navigate to mac_vm scripts directory
+cd mac_vm
 
 # Setup QEMU and create Pop!_OS VM
 ./setup_mac_vm.sh
@@ -170,7 +170,7 @@ cd mac
 
 #### Step 2: Setup UTM from the Apple Store and then install POP_OS!
 
-View the [readme](mac/README.md) to setup POP_OS! on your Mac
+View the [readme](mac_vm/README.md) to setup POP_OS! on your Mac
 
 #### Step 3: Start VM and Test
 
@@ -197,7 +197,7 @@ sudo ./install_offline.sh
   - We're testing airgap bundle installation, not GPU functionality
 - Performance will be slower than native, but accurate for testing
 
-See [`mac/README.md`](mac/README.md) for detailed macOS-specific documentation.
+See [`mac_vm/README.md`](mac_vm/README.md) for detailed macOS-specific documentation.
 
 ## 📦 What's Included
 
@@ -288,7 +288,7 @@ export BUNDLE_DIR="/path/to/airgap_bundle"
 export INSTALL_PREFIX="/usr/local/bin"
 ```
 
-#### macOS VM Setup (`mac/setup_mac_vm.sh`)
+#### macOS VM Setup (`mac_vm/setup_mac_vm.sh`)
 
 ```bash
 # VM directory location (default: ~/vm-popos)
@@ -479,7 +479,7 @@ ollama serve
 
 - **Apple Silicon Macs**: This is expected - uses x86_64 emulation for production testing
   - Performance is slower but ensures accurate testing of production scripts
-  - Consider using `mac/setup_mac_vm.sh` which is optimized for macOS testing
+  - Consider using `mac_vm/setup_mac_vm.sh` which is optimized for macOS testing
 - **Intel Macs**: Should run reasonably well with HVF acceleration
 - Ensure Hypervisor.framework is available (macOS 10.10+)
 - Reduce VM memory if needed: `VM_MEMORY=2G ./scripts/start_vm.sh`
@@ -534,7 +534,7 @@ To reduce size, bundle only needed models:
 - `airgap/docs/SYSTEM_LIBRARIES.md` - System library explanations
 - `airgap/README.md` - Airgap bundle scripts documentation
 - `vm/README.md` - VM bundle scripts documentation
-- `mac/README.md` - Mac testing scripts documentation
+- `mac_vm/README.md` - Mac VM testing scripts documentation
 
 ## 📄 License
 

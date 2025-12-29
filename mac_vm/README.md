@@ -15,7 +15,7 @@ Downloads the Pop!_OS ISO for use with UTM.
 **Usage:**
 
 ```bash
-cd mac
+cd mac_vm
 ./setup_mac_vm.sh
 ```
 
@@ -38,7 +38,7 @@ Removes the downloaded ISO and VM directory to start fresh.
 **Usage:**
 
 ```bash
-cd mac
+cd mac_vm
 ./cleanup_mac_vm.sh [--force]
 ```
 
@@ -79,7 +79,7 @@ cd mac
 ### Step 1: Download the ISO
 
 ```bash
-cd mac
+cd mac_vm
 ./setup_mac_vm.sh
 ```
 
@@ -150,7 +150,14 @@ The bundle will be created in `./airgap_bundle/` with all components pre-built.
 3. Enable "Directory Sharing" and select a folder on your Mac
 4. In Pop!_OS, the shared folder appears at `/mnt/utm-shared`
 
-### Step 7: Install Airgap Bundle
+### Step 7: Install SPICE guest agent tools
+
+```bash
+sudo apt update
+sudo apt install spice-vdagent -y
+```
+
+### Step 8: Install Airgap Bundle
 
 ```bash
 cd /path/to/airgap_bundle
