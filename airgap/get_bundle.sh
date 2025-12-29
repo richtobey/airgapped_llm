@@ -76,6 +76,9 @@ ARCH="amd64"
 #   export OLLAMA_MODELS="mistral:7b-instruct mixtral:8x7b mistral:7b-instruct-q4_K_M"
 # Or for backward compatibility, use OLLAMA_MODEL for a single model:
 #   export OLLAMA_MODEL="mistral:7b-instruct"
+#
+# To move models instead of copy (saves disk space but removes originals):
+#   export MOVE_MODELS=true
 if [[ -n "${OLLAMA_MODEL:-}" ]] && [[ -z "${OLLAMA_MODELS:-}" ]]; then
   # Backward compatibility: single model
   OLLAMA_MODELS="$OLLAMA_MODEL"
@@ -108,9 +111,29 @@ sha256_check_file() {
 # ============
 # 1) Ollama (Linux amd64) + official SHA256 from GitHub Releases
 # ============
-log "Fetching Ollama latest release metadata and linux-amd64 tarball..."
+OLLAMA_TGZ="$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz"
+OLLAMA_SHA="$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz.sha256"
 
-python3 - <<'PY' "$BUNDLE_DIR"
+# Check if file already exists and is valid
+if [[ -f "$OLLAMA_TGZ" ]] && [[ -f "$OLLAMA_SHA" ]]; then
+  log "Ollama Linux binary already exists, verifying..."
+  if sha256_check_file "$OLLAMA_TGZ" "$OLLAMA_SHA"; then
+    log "Ollama already downloaded and verified. Skipping download."
+    mark_success "ollama_linux"
+    OLLAMA_DL_STATUS=0
+  else
+    log "Existing Ollama file failed verification. Re-downloading..."
+    rm -f "$OLLAMA_TGZ" "$OLLAMA_SHA"
+    OLLAMA_DL_STATUS=1
+  fi
+else
+  OLLAMA_DL_STATUS=1
+fi
+
+if [[ $OLLAMA_DL_STATUS -ne 0 ]]; then
+  log "Fetching Ollama latest release metadata and linux-amd64 tarball..."
+  
+  python3 - <<'PY' "$BUNDLE_DIR"
 import json, sys, urllib.request, hashlib
 from pathlib import Path
 
@@ -147,19 +170,20 @@ sha_file.write_text(f"{sha}  {target_name}\n", encoding="utf-8")
 print("Wrote sha256 file:", sha_file)
 print(f"SHA256: {sha}")
 PY
-OLLAMA_DL_STATUS=$?
-if [[ $OLLAMA_DL_STATUS -eq 0 ]]; then
-  log "Verifying Ollama sha256..."
-  if sha256_check_file "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz.sha256"; then
-    log "Ollama verified."
-    mark_success "ollama_linux"
+  OLLAMA_DL_STATUS=$?
+  if [[ $OLLAMA_DL_STATUS -eq 0 ]]; then
+    log "Verifying Ollama sha256..."
+    if sha256_check_file "$OLLAMA_TGZ" "$OLLAMA_SHA"; then
+      log "Ollama verified."
+      mark_success "ollama_linux"
+    else
+      log "ERROR: Ollama SHA256 verification failed"
+      mark_failed "ollama_linux"
+    fi
   else
-    log "ERROR: Ollama SHA256 verification failed"
+    log "ERROR: Failed to download Ollama Linux binary"
     mark_failed "ollama_linux"
   fi
-else
-  log "ERROR: Failed to download Ollama Linux binary"
-  mark_failed "ollama_linux"
 fi
 
 # ============
@@ -170,18 +194,27 @@ read -ra MODEL_ARRAY <<< "$OLLAMA_MODELS"
 MODEL_COUNT=${#MODEL_ARRAY[@]}
 
 if [[ "$IS_MACOS" == "true" ]]; then
-  log "macOS detected. Downloading macOS Ollama binary to pull $MODEL_COUNT model(s)..."
+  # Check if macOS binary already exists
+  MACOS_ARCHIVE="$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -type f \( -name "*darwin*" -o -name "*mac*" \) 2>/dev/null | head -n1)"
   
-  # Download macOS Ollama for pulling models
-  # Detect Mac architecture
-  MAC_ARCH="$(uname -m)"
-  if [[ "$MAC_ARCH" == "arm64" ]]; then
-    MAC_TARGET="arm64"
+  if [[ -n "$MACOS_ARCHIVE" ]] && [[ -f "$MACOS_ARCHIVE" ]]; then
+    ARCHIVE_SIZE=$(du -sh "$MACOS_ARCHIVE" 2>/dev/null | cut -f1 || echo "unknown")
+    log "macOS Ollama binary already exists ($ARCHIVE_SIZE). Skipping download."
+    mark_success "ollama_macos"
+    MACOS_DL_STATUS=0
   else
-    MAC_TARGET="amd64"
-  fi
-  
-  python3 - <<'PY' "$BUNDLE_DIR" "$MAC_TARGET"
+    log "macOS detected. Downloading macOS Ollama binary to pull $MODEL_COUNT model(s)..."
+    
+    # Download macOS Ollama for pulling models
+    # Detect Mac architecture
+    MAC_ARCH="$(uname -m)"
+    if [[ "$MAC_ARCH" == "arm64" ]]; then
+      MAC_TARGET="arm64"
+    else
+      MAC_TARGET="amd64"
+    fi
+    
+    python3 - <<'PY' "$BUNDLE_DIR" "$MAC_TARGET"
 import json, sys, urllib.request
 from pathlib import Path
 
@@ -218,13 +251,14 @@ macos_url = assets[macos_name]
 urllib.request.urlretrieve(macos_url, outdir/macos_name)
 print("Downloaded macOS Ollama:", macos_name)
 PY
-  MACOS_DL_STATUS=$?
-  
-  if [[ $MACOS_DL_STATUS -eq 0 ]]; then
-    mark_success "ollama_macos"
-  else
-    log "ERROR: Failed to download macOS Ollama binary"
-    mark_failed "ollama_macos"
+    MACOS_DL_STATUS=$?
+    
+    if [[ $MACOS_DL_STATUS -eq 0 ]]; then
+      mark_success "ollama_macos"
+    else
+      log "ERROR: Failed to download macOS Ollama binary"
+      mark_failed "ollama_macos"
+    fi
   fi
 
   TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
@@ -316,11 +350,15 @@ if [[ "$IS_LINUX" == "true" ]]; then
   
   tar -xzf "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" -C "$TMP_OLLAMA"
   export PATH="$TMP_OLLAMA:$PATH"
+elif [[ "$IS_MACOS" == "true" ]]; then
+  # TMP_OLLAMA already set above for macOS
+  :
 else
   log "WARNING: Unknown OS ($OS). Skipping model pull."
   log "You will need to manually pull the models on the target Linux system."
   mkdir -p "$BUNDLE_DIR/models/.ollama"
   mark_skipped "models"
+  TMP_OLLAMA=""  # Set empty to avoid cleanup errors
   # Continue with other components
 fi
 
@@ -375,7 +413,7 @@ fi
 sleep 2
 
 # Pull all models (unless we're skipping)
-if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
+if [[ "${SKIP_MODEL_PULL:-true}" != "true" ]]; then
   log "Pulling $MODEL_COUNT model(s): ${OLLAMA_MODELS}"
   log "This may take a while, especially for large models like mixtral:8x7b (~26GB)..."
   PULL_FAILED=false
@@ -399,8 +437,14 @@ else
   PULL_FAILED=true
 fi
 
-# Always copy models, even if pulling failed (they might already exist)
-log "Copying \$HOME/.ollama into bundle..."
+# Always copy/move models, even if pulling failed (they might already exist)
+# Use MOVE_MODELS=true to move instead of copy (saves disk space but removes originals)
+MOVE_MODELS="${MOVE_MODELS:-false}"
+if [[ "$MOVE_MODELS" == "true" ]]; then
+  log "Moving \$HOME/.ollama into bundle (will remove originals)..."
+else
+  log "Copying \$HOME/.ollama into bundle..."
+fi
 mkdir -p "$BUNDLE_DIR/models"
 
 MODELS_COPIED=false
@@ -411,17 +455,62 @@ if [[ ! -d "$HOME/.ollama" ]]; then
   fi
   mark_failed "models"
 else
-  # Use rsync to copy models
-  if rsync -a --delete "$HOME/.ollama/" "$BUNDLE_DIR/models/.ollama/"; then
-    TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
-    log "Models copied successfully. Total size: $TOTAL_SIZE"
-    log "Models bundled: ${OLLAMA_MODELS}"
-    log "Note: mistral:7b-instruct ~4GB, mixtral:8x7b ~26GB, mistral:7b-instruct-q4_K_M ~2GB"
-    mark_success "models"
-    MODELS_COPIED=true
+  if [[ "$MOVE_MODELS" == "true" ]]; then
+    # Move models to save disk space
+    if mv "$HOME/.ollama" "$BUNDLE_DIR/models/.ollama"; then
+      TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
+      log "Models moved successfully. Total size: $TOTAL_SIZE"
+      log "Models bundled: ${OLLAMA_MODELS}"
+      log "Note: Original models in ~/.ollama have been moved to bundle"
+      mark_success "models"
+      MODELS_COPIED=true
+    else
+      log "ERROR: Failed to move models. Check disk space and permissions."
+      mark_failed "models"
+    fi
   else
-    log "ERROR: Failed to copy models. Check disk space and permissions."
-    mark_failed "models"
+    # Use rsync to copy models
+    if rsync -a --delete "$HOME/.ollama/" "$BUNDLE_DIR/models/.ollama/"; then
+      TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
+      log "Models copied successfully. Total size: $TOTAL_SIZE"
+      log "Models bundled: ${OLLAMA_MODELS}"
+      log "Note: mistral:7b-instruct ~4GB, mixtral:8x7b ~26GB, mistral:7b-instruct-q4_K_M ~2GB"
+      mark_success "models"
+      MODELS_COPIED=true
+    else
+      log "ERROR: Failed to copy models. Check disk space and permissions."
+      mark_failed "models"
+    fi
+  fi
+fi
+
+# Clean up temporary files to save disk space
+if [[ "$MODELS_COPIED" == "true" ]]; then
+  log "Cleaning up temporary files to save disk space..."
+  
+  # Clean up temporary ollama binary directory (no longer needed after pulling models)
+  if [[ -n "${TMP_OLLAMA:-}" ]] && [[ -d "$TMP_OLLAMA" ]]; then
+    TMP_SIZE=$(du -sh "$TMP_OLLAMA" 2>/dev/null | cut -f1 || echo "unknown")
+    rm -rf "$TMP_OLLAMA"
+    log "Cleaned up temporary Ollama binary directory ($TMP_SIZE)"
+  fi
+  
+  # Clean up macOS binary archive (we only need the Linux one for target system)
+  if [[ "$IS_MACOS" == "true" ]]; then
+    MACOS_ARCHIVE="$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -type f \( -name "*darwin*" -o -name "*mac*" \) 2>/dev/null | head -n1)"
+    if [[ -n "$MACOS_ARCHIVE" ]] && [[ -f "$MACOS_ARCHIVE" ]]; then
+      ARCHIVE_SIZE=$(du -sh "$MACOS_ARCHIVE" 2>/dev/null | cut -f1 || echo "unknown")
+      rm -f "$MACOS_ARCHIVE"
+      log "Cleaned up macOS Ollama archive ($ARCHIVE_SIZE) - only Linux binary needed for target system"
+    fi
+  fi
+  
+  # Clean up ollama serve log if models were successfully copied
+  if [[ -f "$BUNDLE_DIR/logs/ollama_serve.log" ]]; then
+    # Keep a summary but remove the full log to save space
+    tail -50 "$BUNDLE_DIR/logs/ollama_serve.log" > "$BUNDLE_DIR/logs/ollama_serve.log.summary" 2>/dev/null || true
+    rm -f "$BUNDLE_DIR/logs/ollama_serve.log"
+    log "Cleaned up Ollama server log (summary kept)"
   fi
 fi
 
@@ -430,17 +519,46 @@ if [[ "$MODELS_COPIED" == "false" ]] && [[ -d "$HOME/.ollama/models" ]] && [[ -n
   EXISTING_SIZE=$(du -sh "$HOME/.ollama/models" 2>/dev/null | cut -f1 || echo "unknown")
   log ""
   log "⚠️  Found existing models in ~/.ollama/models ($EXISTING_SIZE) that weren't copied."
-  log "   To copy them now, run:"
-  log "   mkdir -p $BUNDLE_DIR/models"
-  log "   rsync -av --progress ~/.ollama/ $BUNDLE_DIR/models/.ollama/"
+  if [[ "$MOVE_MODELS" == "true" ]]; then
+    log "   To move them now, run:"
+    log "   mkdir -p $BUNDLE_DIR/models"
+    log "   mv ~/.ollama $BUNDLE_DIR/models/.ollama"
+  else
+    log "   To copy them now, run:"
+    log "   mkdir -p $BUNDLE_DIR/models"
+    log "   rsync -av --progress ~/.ollama/ $BUNDLE_DIR/models/.ollama/"
+  fi
   log ""
 fi
 
 # ============
 # 3) VSCodium .deb + published .sha256, then verify
 # ============
-log "Fetching VSCodium latest .deb + .sha256..."
-python3 - <<'PY' "$BUNDLE_DIR"
+# Check if VSCodium already exists
+VSCODIUM_DEB="$(find "$BUNDLE_DIR/vscodium" -maxdepth 1 -name "*_amd64.deb" 2>/dev/null | head -n1)"
+VSCODIUM_SHA=""
+if [[ -n "$VSCODIUM_DEB" ]]; then
+  VSCODIUM_SHA="${VSCODIUM_DEB}.sha256"
+fi
+
+if [[ -n "$VSCODIUM_DEB" ]] && [[ -f "$VSCODIUM_DEB" ]] && [[ -f "$VSCODIUM_SHA" ]]; then
+  log "VSCodium .deb already exists, verifying..."
+  if sha256_check_file "$VSCODIUM_DEB" "$VSCODIUM_SHA"; then
+    log "VSCodium already downloaded and verified. Skipping download."
+    mark_success "vscodium"
+    VSCODIUM_DL_STATUS=0
+  else
+    log "Existing VSCodium file failed verification. Re-downloading..."
+    rm -f "$VSCODIUM_DEB" "$VSCODIUM_SHA"
+    VSCODIUM_DL_STATUS=1
+  fi
+else
+  VSCODIUM_DL_STATUS=1
+fi
+
+if [[ $VSCODIUM_DL_STATUS -ne 0 ]]; then
+  log "Fetching VSCodium latest .deb + .sha256..."
+  python3 - <<'PY' "$BUNDLE_DIR"
 import json, sys, urllib.request
 from pathlib import Path
 
@@ -462,183 +580,291 @@ urllib.request.urlretrieve(assets[deb], outdir/deb)
 urllib.request.urlretrieve(assets[sha], outdir/sha)
 print("Downloaded:", deb, "and", sha)
 PY
-VSCODIUM_DL_STATUS=$?
-if [[ $VSCODIUM_DL_STATUS -eq 0 ]]; then
-  # .sha256 is usually in the form "<hash>  <filename>"
-  if sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256; then
-    log "VSCodium verified."
-    mark_success "vscodium"
+  VSCODIUM_DL_STATUS=$?
+  if [[ $VSCODIUM_DL_STATUS -eq 0 ]]; then
+    # .sha256 is usually in the form "<hash>  <filename>"
+    if sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256; then
+      log "VSCodium verified."
+      mark_success "vscodium"
+    else
+      log "ERROR: VSCodium SHA256 verification failed"
+      mark_failed "vscodium"
+    fi
   else
-    log "ERROR: VSCodium SHA256 verification failed"
+    log "ERROR: Failed to download VSCodium. Continuing with other components..."
     mark_failed "vscodium"
   fi
-else
-  log "ERROR: Failed to download VSCodium. Continuing with other components..."
-  mark_failed "vscodium"
 fi
 
 # ============
 # 4) Continue.dev VSIX from Open VSX + sha256 resource, then verify
 # ============
-log "Fetching Continue VSIX + sha256 from Open VSX..."
-python3 - <<'PY' "$BUNDLE_DIR"
-import re, sys, urllib.request
+# Check if Continue VSIX already exists
+CONTINUE_VSIX="$(find "$BUNDLE_DIR/continue" -maxdepth 1 -name "Continue.continue-*.vsix" 2>/dev/null | head -n1)"
+CONTINUE_SHA=""
+if [[ -n "$CONTINUE_VSIX" ]]; then
+  CONTINUE_SHA="${CONTINUE_VSIX}.sha256"
+fi
+
+if [[ -n "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_SHA" ]]; then
+  log "Continue VSIX already exists, verifying..."
+  if sha256_check_file "$CONTINUE_VSIX" "$CONTINUE_SHA"; then
+    log "Continue VSIX already downloaded and verified. Skipping download."
+    mark_success "continue"
+    CONTINUE_DL_STATUS=0
+  else
+    log "Existing Continue VSIX failed verification. Re-downloading..."
+    rm -f "$CONTINUE_VSIX" "$CONTINUE_SHA"
+    CONTINUE_DL_STATUS=1
+  fi
+else
+  CONTINUE_DL_STATUS=1
+fi
+
+if [[ "$CONTINUE_DL_STATUS" -ne 0 ]]; then
+  log "Fetching Continue VSIX + sha256 from Open VSX..."
+  python3 - <<'PY' "$BUNDLE_DIR"
+import json, sys, urllib.request
 from pathlib import Path
 
 bundle = Path(sys.argv[1])
 outdir = bundle/"continue"
 outdir.mkdir(parents=True, exist_ok=True)
 
-# We scrape the extension page to discover exact version + download + sha256 links.
-# (Open VSX stores a sha256 resource type for extensions.)
-page_url = "https://open-vsx.org/extension/Continue/continue"
-html = urllib.request.urlopen(page_url).read().decode("utf-8", errors="ignore")
-
-# Try to find the "download" API URL and the "sha256" URL.
-# Common Open VSX patterns include /api/<ns>/<ext>/<ver>/file/...vsix and /api/<ns>/<ext>/<ver>/sha256
-m_ver = re.search(r'"version"\s*:\s*"([^"]+)"', html)
-version = m_ver.group(1) if m_ver else None
-if not version:
-  # fallback: look for something like /api/.../<ver>/file/
-  m = re.search(r'/api/Continue/continue/([^/]+)/file/', html)
-  version = m.group(1) if m else None
-if not version:
-  raise SystemExit("Could not determine Continue extension version from Open VSX page HTML.")
-
-# We'll construct URLs using the discovered version.
-# The file name is typically Continue.continue-<version>.vsix
-vsix_name = f"Continue.continue-{version}.vsix"
-download_url = f"https://open-vsx.org/api/Continue/continue/{version}/file/{vsix_name}"
-sha256_url   = f"https://open-vsx.org/api/Continue/continue/{version}/sha256"
-
-# Download both
-urllib.request.urlretrieve(download_url, outdir/vsix_name)
-urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
-
-print("Version:", version)
-print("Downloaded:", vsix_name)
-print("SHA256 URL:", sha256_url)
+# Use Open VSX API to get extension metadata
+api_url = "https://open-vsx.org/api/Continue/continue"
+try:
+    with urllib.request.urlopen(api_url) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    
+    # Get the latest version from the API response
+    if isinstance(data, list) and len(data) > 0:
+        # If it's a list, get the first (latest) version
+        latest = data[0]
+        version = latest.get("version")
+        namespace = latest.get("namespace", "Continue")
+        name = latest.get("name", "continue")
+    elif isinstance(data, dict):
+        # If it's a single object, use it directly
+        version = data.get("version")
+        namespace = data.get("namespace", "Continue")
+        name = data.get("name", "continue")
+    else:
+        raise SystemExit("Unexpected API response format")
+    
+    if not version:
+        raise SystemExit("Could not determine version from API response")
+    
+    # Construct URLs using the discovered version
+    vsix_name = f"{namespace}.{name}-{version}.vsix"
+    download_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/file/{vsix_name}"
+    sha256_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/sha256"
+    
+    # Download both
+    urllib.request.urlretrieve(download_url, outdir/vsix_name)
+    urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
+    
+    print("Version:", version)
+    print("Downloaded:", vsix_name)
+    print("SHA256 URL:", sha256_url)
+except urllib.error.URLError as e:
+    raise SystemExit(f"Failed to fetch from Open VSX API: {e}")
+except (KeyError, ValueError) as e:
+    raise SystemExit(f"Failed to parse API response: {e}")
 PY
-CONTINUE_DL_STATUS=$?
-if [[ "$CONTINUE_DL_STATUS" -eq 0 ]]; then
-  if sha256_check_file "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256; then
-    log "Continue VSIX verified."
-    mark_success "continue"
+  CONTINUE_DL_STATUS=$?
+  if [[ "$CONTINUE_DL_STATUS" -eq 0 ]]; then
+    if sha256_check_file "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256; then
+      log "Continue VSIX verified."
+      mark_success "continue"
+    else
+      log "ERROR: Continue VSIX SHA256 verification failed"
+      mark_failed "continue"
+    fi
   else
-    log "ERROR: Continue VSIX SHA256 verification failed"
+    log "ERROR: Failed to download Continue VSIX. Continuing with other components..."
     mark_failed "continue"
   fi
-else
-  log "ERROR: Failed to download Continue VSIX. Continuing with other components..."
-  mark_failed "continue"
 fi
 
 # ============
 # 5) Python Extension VSIX from Open VSX + sha256, then verify
 # ============
-log "Fetching Python extension VSIX + sha256 from Open VSX..."
-python3 - <<'PY' "$BUNDLE_DIR"
-import re, sys, urllib.request
+# Check if Python extension VSIX already exists
+PYTHON_VSIX="$(find "$BUNDLE_DIR/extensions" -maxdepth 1 -name "ms-python.python-*.vsix" 2>/dev/null | head -n1)"
+PYTHON_SHA=""
+if [[ -n "$PYTHON_VSIX" ]]; then
+  PYTHON_SHA="${PYTHON_VSIX}.sha256"
+fi
+
+if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_SHA" ]]; then
+  log "Python extension VSIX already exists, verifying..."
+  if sha256_check_file "$PYTHON_VSIX" "$PYTHON_SHA"; then
+    log "Python extension VSIX already downloaded and verified. Skipping download."
+    mark_success "python_ext"
+    PYTHON_EXT_DL_STATUS=0
+  else
+    log "Existing Python extension VSIX failed verification. Re-downloading..."
+    rm -f "$PYTHON_VSIX" "$PYTHON_SHA"
+    PYTHON_EXT_DL_STATUS=1
+  fi
+else
+  PYTHON_EXT_DL_STATUS=1
+fi
+
+if [[ $PYTHON_EXT_DL_STATUS -ne 0 ]]; then
+  log "Fetching Python extension VSIX + sha256 from Open VSX..."
+  python3 - <<'PY' "$BUNDLE_DIR"
+import json, sys, urllib.request
 from pathlib import Path
 
 bundle = Path(sys.argv[1])
 outdir = bundle/"extensions"
 outdir.mkdir(parents=True, exist_ok=True)
 
-# We scrape the extension page to discover exact version + download + sha256 links.
-page_url = "https://open-vsx.org/extension/ms-python/python"
-html = urllib.request.urlopen(page_url).read().decode("utf-8", errors="ignore")
-
-# Try to find the version
-m_ver = re.search(r'"version"\s*:\s*"([^"]+)"', html)
-version = m_ver.group(1) if m_ver else None
-if not version:
-  # fallback: look for something like /api/.../<ver>/file/
-  m = re.search(r'/api/ms-python/python/([^/]+)/file/', html)
-  version = m.group(1) if m else None
-if not version:
-  raise SystemExit("Could not determine Python extension version from Open VSX page HTML.")
-
-# Construct URLs using the discovered version
-vsix_name = f"ms-python.python-{version}.vsix"
-download_url = f"https://open-vsx.org/api/ms-python/python/{version}/file/{vsix_name}"
-sha256_url   = f"https://open-vsx.org/api/ms-python/python/{version}/sha256"
-
-# Download both
-urllib.request.urlretrieve(download_url, outdir/vsix_name)
-urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
-
-print("Version:", version)
-print("Downloaded:", vsix_name)
-print("SHA256 URL:", sha256_url)
+# Use Open VSX API to get extension metadata
+api_url = "https://open-vsx.org/api/ms-python/python"
+try:
+    with urllib.request.urlopen(api_url) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    
+    # Get the latest version from the API response
+    if isinstance(data, list) and len(data) > 0:
+        latest = data[0]
+        version = latest.get("version")
+        namespace = latest.get("namespace", "ms-python")
+        name = latest.get("name", "python")
+    elif isinstance(data, dict):
+        version = data.get("version")
+        namespace = data.get("namespace", "ms-python")
+        name = data.get("name", "python")
+    else:
+        raise SystemExit("Unexpected API response format")
+    
+    if not version:
+        raise SystemExit("Could not determine version from API response")
+    
+    # Construct URLs using the discovered version
+    vsix_name = f"{namespace}.{name}-{version}.vsix"
+    download_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/file/{vsix_name}"
+    sha256_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/sha256"
+    
+    # Download both
+    urllib.request.urlretrieve(download_url, outdir/vsix_name)
+    urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
+    
+    print("Version:", version)
+    print("Downloaded:", vsix_name)
+    print("SHA256 URL:", sha256_url)
+except urllib.error.URLError as e:
+    raise SystemExit(f"Failed to fetch from Open VSX API: {e}")
+except (KeyError, ValueError) as e:
+    raise SystemExit(f"Failed to parse API response: {e}")
 PY
-PYTHON_EXT_DL_STATUS=$?
+  PYTHON_EXT_DL_STATUS=$?
 
-if [[ $PYTHON_EXT_DL_STATUS -eq 0 ]]; then
-  if sha256_check_file "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256; then
-    log "Python extension VSIX verified."
-    mark_success "python_ext"
+  if [[ $PYTHON_EXT_DL_STATUS -eq 0 ]]; then
+    if sha256_check_file "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256; then
+      log "Python extension VSIX verified."
+      mark_success "python_ext"
+    else
+      log "ERROR: Python extension VSIX SHA256 verification failed"
+      mark_failed "python_ext"
+    fi
   else
-    log "ERROR: Python extension VSIX SHA256 verification failed"
+    log "ERROR: Failed to download Python extension VSIX. Continuing with other components..."
     mark_failed "python_ext"
   fi
-else
-  log "ERROR: Failed to download Python extension VSIX. Continuing with other components..."
-  mark_failed "python_ext"
 fi
 
 # ============
 # 6) Rust Analyzer Extension VSIX from Open VSX + sha256, then verify
 # ============
-log "Fetching Rust Analyzer extension VSIX + sha256 from Open VSX..."
-python3 - <<'PY' "$BUNDLE_DIR"
-import re, sys, urllib.request
+# Check if Rust Analyzer extension VSIX already exists
+RUST_VSIX="$(find "$BUNDLE_DIR/extensions" -maxdepth 1 -name "rust-lang.rust-analyzer-*.vsix" 2>/dev/null | head -n1)"
+RUST_SHA=""
+if [[ -n "$RUST_VSIX" ]]; then
+  RUST_SHA="${RUST_VSIX}.sha256"
+fi
+
+if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]] && [[ -f "$RUST_SHA" ]]; then
+  log "Rust Analyzer extension VSIX already exists, verifying..."
+  if sha256_check_file "$RUST_VSIX" "$RUST_SHA"; then
+    log "Rust Analyzer extension VSIX already downloaded and verified. Skipping download."
+    mark_success "rust_ext"
+    RUST_EXT_DL_STATUS=0
+  else
+    log "Existing Rust Analyzer extension VSIX failed verification. Re-downloading..."
+    rm -f "$RUST_VSIX" "$RUST_SHA"
+    RUST_EXT_DL_STATUS=1
+  fi
+else
+  RUST_EXT_DL_STATUS=1
+fi
+
+if [[ $RUST_EXT_DL_STATUS -ne 0 ]]; then
+  log "Fetching Rust Analyzer extension VSIX + sha256 from Open VSX..."
+  python3 - <<'PY' "$BUNDLE_DIR"
+import json, sys, urllib.request
 from pathlib import Path
 
 bundle = Path(sys.argv[1])
 outdir = bundle/"extensions"
 outdir.mkdir(parents=True, exist_ok=True)
 
-# We scrape the extension page to discover exact version + download + sha256 links.
-page_url = "https://open-vsx.org/extension/rust-lang/rust-analyzer"
-html = urllib.request.urlopen(page_url).read().decode("utf-8", errors="ignore")
-
-# Try to find the version
-m_ver = re.search(r'"version"\s*:\s*"([^"]+)"', html)
-version = m_ver.group(1) if m_ver else None
-if not version:
-  # fallback: look for something like /api/.../<ver>/file/
-  m = re.search(r'/api/rust-lang/rust-analyzer/([^/]+)/file/', html)
-  version = m.group(1) if m else None
-if not version:
-  raise SystemExit("Could not determine Rust Analyzer extension version from Open VSX page HTML.")
-
-# Construct URLs using the discovered version
-vsix_name = f"rust-lang.rust-analyzer-{version}.vsix"
-download_url = f"https://open-vsx.org/api/rust-lang/rust-analyzer/{version}/file/{vsix_name}"
-sha256_url   = f"https://open-vsx.org/api/rust-lang/rust-analyzer/{version}/sha256"
-
-# Download both
-urllib.request.urlretrieve(download_url, outdir/vsix_name)
-urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
-
-print("Version:", version)
-print("Downloaded:", vsix_name)
-print("SHA256 URL:", sha256_url)
+# Use Open VSX API to get extension metadata
+api_url = "https://open-vsx.org/api/rust-lang/rust-analyzer"
+try:
+    with urllib.request.urlopen(api_url) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    
+    # Get the latest version from the API response
+    if isinstance(data, list) and len(data) > 0:
+        latest = data[0]
+        version = latest.get("version")
+        namespace = latest.get("namespace", "rust-lang")
+        name = latest.get("name", "rust-analyzer")
+    elif isinstance(data, dict):
+        version = data.get("version")
+        namespace = data.get("namespace", "rust-lang")
+        name = data.get("name", "rust-analyzer")
+    else:
+        raise SystemExit("Unexpected API response format")
+    
+    if not version:
+        raise SystemExit("Could not determine version from API response")
+    
+    # Construct URLs using the discovered version
+    vsix_name = f"{namespace}.{name}-{version}.vsix"
+    download_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/file/{vsix_name}"
+    sha256_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/sha256"
+    
+    # Download both
+    urllib.request.urlretrieve(download_url, outdir/vsix_name)
+    urllib.request.urlretrieve(sha256_url, outdir/(vsix_name + ".sha256"))
+    
+    print("Version:", version)
+    print("Downloaded:", vsix_name)
+    print("SHA256 URL:", sha256_url)
+except urllib.error.URLError as e:
+    raise SystemExit(f"Failed to fetch from Open VSX API: {e}")
+except (KeyError, ValueError) as e:
+    raise SystemExit(f"Failed to parse API response: {e}")
 PY
-RUST_EXT_DL_STATUS=$?
+  RUST_EXT_DL_STATUS=$?
 
-if [[ $RUST_EXT_DL_STATUS -eq 0 ]]; then
-  if sha256_check_file "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256; then
-    log "Rust Analyzer extension VSIX verified."
-    mark_success "rust_ext"
+  if [[ $RUST_EXT_DL_STATUS -eq 0 ]]; then
+    if sha256_check_file "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256; then
+      log "Rust Analyzer extension VSIX verified."
+      mark_success "rust_ext"
+    else
+      log "ERROR: Rust Analyzer extension VSIX SHA256 verification failed"
+      mark_failed "rust_ext"
+    fi
   else
-    log "ERROR: Rust Analyzer extension VSIX SHA256 verification failed"
+    log "ERROR: Failed to download Rust Analyzer extension VSIX. Continuing with other components..."
     mark_failed "rust_ext"
   fi
-else
-  log "ERROR: Failed to download Rust Analyzer extension VSIX. Continuing with other components..."
-  mark_failed "rust_ext"
 fi
 
 # ============
@@ -802,8 +1028,17 @@ fi
 # ============
 # 8) Download Rust toolchain (rustup-init)
 # ============
-log "Downloading Rust toolchain installer..."
-python3 - <<'PY' "$BUNDLE_DIR"
+# Check if rustup-init already exists
+RUSTUP_INIT="$BUNDLE_DIR/rust/toolchain/rustup-init"
+if [[ -f "$RUSTUP_INIT" ]] && [[ -x "$RUSTUP_INIT" ]]; then
+  RUSTUP_SIZE=$(du -sh "$RUSTUP_INIT" 2>/dev/null | cut -f1 || echo "unknown")
+  log "Rust toolchain installer already exists ($RUSTUP_SIZE). Skipping download."
+  mark_success "rust_toolchain"
+  RUST_TOOLCHAIN_EXISTS=true
+else
+  RUST_TOOLCHAIN_EXISTS=false
+  log "Downloading Rust toolchain installer..."
+  python3 - <<'PY' "$BUNDLE_DIR"
 import sys, urllib.request
 from pathlib import Path
 
@@ -823,19 +1058,16 @@ except Exception as e:
     print(f"Warning: Could not download rustup-init: {e}")
     print("You may need to download it manually from https://rustup.rs/")
 PY
-
-# Verify rustup-init was downloaded
-if [[ -f "$BUNDLE_DIR/rust/toolchain/rustup-init" ]]; then
-  # Also create a symlink/copy in the rust directory for easy access
-  cp "$BUNDLE_DIR/rust/toolchain/rustup-init" "$BUNDLE_DIR/rust/rustup-init" 2>/dev/null || true
-fi
-
-if [[ -f "$BUNDLE_DIR/rust/toolchain/rustup-init" ]] || [[ -f "$BUNDLE_DIR/rust/rustup-init" ]]; then
-  log "Rust toolchain installer downloaded."
-  mark_success "rust_toolchain"
-else
-  log "WARNING: rustup-init not downloaded. You may need to download it manually."
-  mark_failed "rust_toolchain"
+  # Verify rustup-init was downloaded
+  if [[ -f "$BUNDLE_DIR/rust/toolchain/rustup-init" ]]; then
+    # Also create a symlink/copy in the rust directory for easy access
+    cp "$BUNDLE_DIR/rust/toolchain/rustup-init" "$BUNDLE_DIR/rust/rustup-init" 2>/dev/null || true
+    log "Rust toolchain installer downloaded."
+    mark_success "rust_toolchain"
+  else
+    log "WARNING: rustup-init not downloaded. You may need to download it manually."
+    mark_failed "rust_toolchain"
+  fi
 fi
 
 # ============
