@@ -11,6 +11,7 @@ These scripts create a complete offline development environment bundle that can 
 ### `get_bundle.sh`
 
 Creates the airgap bundle containing:
+
 - Ollama (local LLM server)
 - VSCodium (code editor)
 - Continue extension (AI coding assistant)
@@ -21,12 +22,14 @@ Creates the airgap bundle containing:
 - AI models (Mistral, Mixtral)
 
 **Usage:**
+
 ```bash
 cd airgap
 ./get_bundle.sh
 ```
 
 **Environment Variables:**
+
 - `BUNDLE_DIR` - Output directory (default: `./airgap_bundle`)
 - `OLLAMA_MODELS` - Space-separated list of models to bundle
 - `PYTHON_REQUIREMENTS` - Path to requirements.txt (default: `requirements.txt` in same directory)
@@ -37,12 +40,14 @@ cd airgap
 Installs the airgap bundle on the target Pop!_OS system.
 
 **Usage:**
+
 ```bash
 cd /path/to/airgap_bundle
 ./install_offline.sh
 ```
 
 **Environment Variables:**
+
 - `BUNDLE_DIR` - Bundle directory location (default: `./airgap_bundle`)
 - `INSTALL_PREFIX` - Installation prefix for Ollama (default: `/usr/local/bin`)
 
@@ -61,4 +66,3 @@ cd /path/to/airgap_bundle
 ## Documentation
 
 See the main [README.md](../README.md) for complete documentation.
-

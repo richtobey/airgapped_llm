@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ============
+# OS Detection - This script is for Debian/Linux only
+# ============
+OS="$(uname -s)"
+if [[ "$OS" != "Linux" ]]; then
+  echo "ERROR: This script is designed for Debian/Linux systems only." >&2
+  echo "Detected OS: $OS" >&2
+  echo "" >&2
+  echo "This script uses Debian-specific tools:" >&2
+  echo "  - apt-get / dpkg (package management)" >&2
+  echo "  - sha256sum (checksum verification)" >&2
+  echo "  - .deb package format" >&2
+  echo "" >&2
+  echo "This script should be run on the target Linux system (e.g., Pop!_OS, Ubuntu, Debian)." >&2
+  echo "Use get_bundle.sh on macOS to create the bundle, then transfer it to Linux." >&2
+  exit 1
+fi
+
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 

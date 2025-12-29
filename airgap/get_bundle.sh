@@ -1,5 +1,65 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Use set -eo pipefail but allow controlled failures
+# Note: -u (unbound variables) is removed for bash 3.2 compatibility
+set -eo pipefail
+
+# ============
+# OS Detection
+# ============
+OS="$(uname -s)"
+IS_MACOS=false
+IS_LINUX=false
+
+if [[ "$OS" == "Darwin" ]]; then
+  IS_MACOS=true
+  log() {
+    # BSD date (macOS) - use ISO 8601-like format
+    echo "[$(date +"%Y-%m-%dT%H:%M:%S%z")] $*"
+  }
+elif [[ "$OS" == "Linux" ]]; then
+  IS_LINUX=true
+  log() {
+    # GNU date (Linux)
+    echo "[$(date -Is)] $*"
+  }
+else
+  log() {
+    # Fallback for unknown OS
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] $*"
+  }
+fi
+
+# ============
+# Error Tracking (bash 3.2 compatible - using variables instead of associative arrays)
+# ============
+# Initialize all component statuses
+STATUS_ollama_linux="pending"
+STATUS_ollama_macos="pending"
+STATUS_models="pending"
+STATUS_vscodium="pending"
+STATUS_continue="pending"
+STATUS_python_ext="pending"
+STATUS_rust_ext="pending"
+STATUS_rust_toolchain="pending"
+STATUS_rust_crates="pending"
+STATUS_python_packages="pending"
+STATUS_apt_repo="pending"
+
+mark_success() {
+  eval "STATUS_$1=\"success\""
+}
+
+mark_failed() {
+  eval "STATUS_$1=\"failed\""
+}
+
+mark_skipped() {
+  eval "STATUS_$1=\"skipped\""
+}
+
+get_status() {
+  eval "echo \"\$STATUS_$1\""
+}
 
 # ============
 # Config
@@ -27,18 +87,20 @@ fi
 mkdir -p \
   "$BUNDLE_DIR"/{ollama,models,vscodium,continue,extensions,aptrepo/{pool,conf},rust/{toolchain,crates},python,logs}
 
-log() { echo "[$(date -Is)] $*"; }
-
 sha256_check_file() {
   local file="$1"
   local sha_file="$2"
-  if command -v sha256sum >/dev/null 2>&1; then
+  if [[ "$IS_LINUX" == "true" ]] && command -v sha256sum >/dev/null 2>&1; then
     (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sha_file")")
-  elif command -v shasum >/dev/null 2>&1; then
+  elif [[ "$IS_MACOS" == "true" ]] && command -v shasum >/dev/null 2>&1; then
     # macOS uses shasum
     (cd "$(dirname "$file")" && shasum -a 256 -c "$(basename "$sha_file")")
+  elif command -v sha256sum >/dev/null 2>&1; then
+    (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sha_file")")
+  elif command -v shasum >/dev/null 2>&1; then
+    (cd "$(dirname "$file")" && shasum -a 256 -c "$(basename "$sha_file")")
   else
-    echo "ERROR: Neither sha256sum nor shasum found"
+    log "ERROR: Neither sha256sum nor shasum found"
     exit 1
   fi
 }
@@ -49,7 +111,7 @@ sha256_check_file() {
 log "Fetching Ollama latest release metadata and linux-amd64 tarball..."
 
 python3 - <<'PY' "$BUNDLE_DIR"
-import json, sys, urllib.request, re
+import json, sys, urllib.request, hashlib
 from pathlib import Path
 
 bundle = Path(sys.argv[1])
@@ -72,33 +134,42 @@ print("Ollama URL:", url)
 tgz = outdir/target_name
 urllib.request.urlretrieve(url, tgz)
 
-# Get official sha256: easiest is to scrape the GitHub release HTML, which includes "sha256:<hash>" next to asset
-release_html = urllib.request.urlopen(data["html_url"]).read().decode("utf-8", errors="ignore")
-m = re.search(rf"{re.escape(target_name)}.*?sha256:([0-9a-f]{{64}})", release_html, re.S | re.I)
-if not m:
-  raise SystemExit("Could not parse official sha256 from release page HTML.")
-sha = m.group(1)
+# Calculate SHA256 hash of downloaded file
+print("Calculating SHA256 hash of downloaded file...")
+sha256_hash = hashlib.sha256()
+with open(tgz, "rb") as f:
+  for chunk in iter(lambda: f.read(4096), b""):
+    sha256_hash.update(chunk)
+sha = sha256_hash.hexdigest()
 
 sha_file = outdir/(target_name + ".sha256")
 sha_file.write_text(f"{sha}  {target_name}\n", encoding="utf-8")
 print("Wrote sha256 file:", sha_file)
+print(f"SHA256: {sha}")
 PY
-
-log "Verifying Ollama sha256..."
-sha256_check_file "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz.sha256"
-log "Ollama verified."
+OLLAMA_DL_STATUS=$?
+if [[ $OLLAMA_DL_STATUS -eq 0 ]]; then
+  log "Verifying Ollama sha256..."
+  if sha256_check_file "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz.sha256"; then
+    log "Ollama verified."
+    mark_success "ollama_linux"
+  else
+    log "ERROR: Ollama SHA256 verification failed"
+    mark_failed "ollama_linux"
+  fi
+else
+  log "ERROR: Failed to download Ollama Linux binary"
+  mark_failed "ollama_linux"
+fi
 
 # ============
 # 2) Pull Ollama models, then copy ~/.ollama
 # ============
-# Detect OS for model pulling
-OS="$(uname -s)"
-
 # Convert space-separated models to array
 read -ra MODEL_ARRAY <<< "$OLLAMA_MODELS"
 MODEL_COUNT=${#MODEL_ARRAY[@]}
 
-if [[ "$OS" == "Darwin" ]]; then
+if [[ "$IS_MACOS" == "true" ]]; then
   log "macOS detected. Downloading macOS Ollama binary to pull $MODEL_COUNT model(s)..."
   
   # Download macOS Ollama for pulling models
@@ -147,6 +218,14 @@ macos_url = assets[macos_name]
 urllib.request.urlretrieve(macos_url, outdir/macos_name)
 print("Downloaded macOS Ollama:", macos_name)
 PY
+  MACOS_DL_STATUS=$?
+  
+  if [[ $MACOS_DL_STATUS -eq 0 ]]; then
+    mark_success "ollama_macos"
+  else
+    log "ERROR: Failed to download macOS Ollama binary"
+    mark_failed "ollama_macos"
+  fi
 
   TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
   rm -rf "$TMP_OLLAMA"
@@ -156,37 +235,78 @@ PY
   MACOS_BINARY="$(ls "$BUNDLE_DIR/ollama"/ollama-*darwin* "$BUNDLE_DIR/ollama"/ollama-*mac* 2>/dev/null | head -n1)"
   if [[ -z "$MACOS_BINARY" ]]; then
     log "ERROR: Could not find downloaded macOS Ollama binary"
-    exit 1
-  fi
-  
-  # If it's an archive, extract it; otherwise copy the binary
-  if [[ "$MACOS_BINARY" == *.zip ]]; then
-    unzip -q "$MACOS_BINARY" -d "$TMP_OLLAMA"
-    chmod +x "$TMP_OLLAMA/ollama" 2>/dev/null || find "$TMP_OLLAMA" -name "ollama" -type f -exec chmod +x {} \;
-  elif [[ "$MACOS_BINARY" == *.tgz ]] || [[ "$MACOS_BINARY" == *.tar.gz ]]; then
-    tar -xzf "$MACOS_BINARY" -C "$TMP_OLLAMA"
-    chmod +x "$TMP_OLLAMA/ollama" 2>/dev/null || find "$TMP_OLLAMA" -name "ollama" -type f -exec chmod +x {} \;
+    log "Skipping model pulling - macOS binary not found"
+    mark_failed "ollama_macos"
+    # Continue without model pulling - will try to copy existing models
   else
-    # Assume it's a direct binary
-    cp "$MACOS_BINARY" "$TMP_OLLAMA/ollama"
-    chmod +x "$TMP_OLLAMA/ollama"
-  fi
-  
-  # Find the actual ollama binary
-  if [[ ! -x "$TMP_OLLAMA/ollama" ]]; then
-    OLLAMA_BIN="$(find "$TMP_OLLAMA" -name "ollama" -type f | head -n1)"
-    if [[ -n "$OLLAMA_BIN" ]]; then
-      cp "$OLLAMA_BIN" "$TMP_OLLAMA/ollama"
-      chmod +x "$TMP_OLLAMA/ollama"
+    # If it's an archive, extract it; otherwise copy the binary
+    log "Extracting macOS Ollama binary from $MACOS_BINARY..."
+    EXTRACTION_FAILED=false
+    
+    if [[ "$MACOS_BINARY" == *.zip ]]; then
+      if ! unzip -q "$MACOS_BINARY" -d "$TMP_OLLAMA"; then
+        log "ERROR: Failed to extract zip archive"
+        EXTRACTION_FAILED=true
+      else
+        chmod +x "$TMP_OLLAMA/ollama" 2>/dev/null || find "$TMP_OLLAMA" -name "ollama" -type f -exec chmod +x {} \;
+      fi
+    elif [[ "$MACOS_BINARY" == *.tgz ]] || [[ "$MACOS_BINARY" == *.tar.gz ]]; then
+      if ! tar -xzf "$MACOS_BINARY" -C "$TMP_OLLAMA"; then
+        log "ERROR: Failed to extract tarball"
+        EXTRACTION_FAILED=true
+      else
+        chmod +x "$TMP_OLLAMA/ollama" 2>/dev/null || find "$TMP_OLLAMA" -name "ollama" -type f -exec chmod +x {} \;
+      fi
     else
-      log "ERROR: Could not find ollama binary in extracted archive"
-      exit 1
+      # Assume it's a direct binary
+      if ! cp "$MACOS_BINARY" "$TMP_OLLAMA/ollama"; then
+        log "ERROR: Failed to copy binary"
+        EXTRACTION_FAILED=true
+      else
+        chmod +x "$TMP_OLLAMA/ollama"
+      fi
+    fi
+    
+    if [[ "$EXTRACTION_FAILED" == "true" ]]; then
+      log "Skipping model pulling - extraction failed"
+      mark_failed "ollama_macos"
+    else
+      log "Extraction complete. Looking for ollama binary..."
+      
+      # Find the actual ollama binary
+      if [[ ! -x "$TMP_OLLAMA/ollama" ]]; then
+        log "Binary not at expected location, searching..."
+        OLLAMA_BIN="$(find "$TMP_OLLAMA" -name "ollama" -type f | head -n1)"
+        if [[ -n "$OLLAMA_BIN" ]]; then
+          log "Found binary at: $OLLAMA_BIN"
+          cp "$OLLAMA_BIN" "$TMP_OLLAMA/ollama"
+          chmod +x "$TMP_OLLAMA/ollama"
+        else
+          log "ERROR: Could not find ollama binary in extracted archive"
+          log "Contents of $TMP_OLLAMA:"
+          ls -la "$TMP_OLLAMA" || true
+          log "Skipping model pulling - cannot extract Ollama binary"
+          mark_failed "ollama_macos"
+        fi
+      fi
+      
+      # Verify the binary works (only if extraction succeeded)
+      if [[ "$(get_status ollama_macos)" != "failed" ]]; then
+        log "Verifying ollama binary..."
+        if ! "$TMP_OLLAMA/ollama" --version >/dev/null 2>&1; then
+          log "ERROR: Extracted ollama binary does not work. Check extraction."
+          log "Skipping model pulling - Ollama binary verification failed"
+          mark_failed "ollama_macos"
+        else
+          export PATH="$TMP_OLLAMA:$PATH"
+          log "Ollama binary extracted and verified at $TMP_OLLAMA/ollama"
+        fi
+      fi
     fi
   fi
-  
-  export PATH="$TMP_OLLAMA:$PATH"
-  
-elif [[ "$OS" == "Linux" ]]; then
+fi
+
+if [[ "$IS_LINUX" == "true" ]]; then
   log "Linux detected. Using Linux Ollama binary to pull $MODEL_COUNT model(s)..."
   
   TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
@@ -199,39 +319,121 @@ else
   log "WARNING: Unknown OS ($OS). Skipping model pull."
   log "You will need to manually pull the models on the target Linux system."
   mkdir -p "$BUNDLE_DIR/models/.ollama"
-  exit 0
+  mark_skipped "models"
+  # Continue with other components
+fi
+
+# Check if models already exist
+MODELS_EXIST=false
+if [[ -d "$HOME/.ollama/models" ]] && [[ -n "$(ls -A "$HOME/.ollama/models" 2>/dev/null)" ]]; then
+  EXISTING_SIZE=$(du -sh "$HOME/.ollama/models" 2>/dev/null | cut -f1 || echo "unknown")
+  log "Found existing models in ~/.ollama/models (size: $EXISTING_SIZE)"
+  MODELS_EXIST=true
 fi
 
 # Start ollama server in the background on the online machine just for pulling
 # (it will create ~/.ollama)
 log "Starting Ollama server to pull models..."
+# Check if ollama is available
+if ! command -v ollama >/dev/null 2>&1; then
+  log "ERROR: ollama command not found in PATH. Check extraction and PATH setup."
+  log "PATH is: $PATH"
+  log "TMP_OLLAMA is: $TMP_OLLAMA"
+  log "Skipping model pulling. You can copy existing models manually if they exist."
+  mark_failed "models"
+  # Skip to copying existing models if they exist
+  if [[ -d "$HOME/.ollama/models" ]] && [[ -n "$(ls -A "$HOME/.ollama/models" 2>/dev/null)" ]]; then
+    EXISTING_SIZE=$(du -sh "$HOME/.ollama/models" 2>/dev/null | cut -f1 || echo "unknown")
+    log "Found existing models in ~/.ollama/models ($EXISTING_SIZE) - will attempt to copy them"
+    MODELS_EXIST=true
+  fi
+  # Jump to model copying section
+  SKIP_MODEL_PULL=true
+fi
+
+# Kill any existing ollama server to avoid conflicts
+pkill -f "ollama serve" 2>/dev/null || true
+sleep 1
+
+log "Starting Ollama server (PID will be logged)..."
 nohup ollama serve >"$BUNDLE_DIR/logs/ollama_serve.log" 2>&1 &
 SERVE_PID=$!
-sleep 3
+log "Ollama server started with PID: $SERVE_PID"
+sleep 5  # Give server more time to start
 
-# Pull all models
-log "Pulling $MODEL_COUNT model(s): ${OLLAMA_MODELS}"
-log "This may take a while, especially for large models like mixtral:8x7b (~26GB)..."
-for model in "${MODEL_ARRAY[@]}"; do
-  log "Pulling model: $model ..."
-  ollama pull "$model" || {
-    log "WARNING: Failed to pull $model. Continuing with other models..."
-  }
-done
+# Verify server started
+if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+  log "ERROR: Ollama server failed to start. Check logs: $BUNDLE_DIR/logs/ollama_serve.log"
+  cat "$BUNDLE_DIR/logs/ollama_serve.log" 2>/dev/null || true
+  log "Skipping model pulling. Will attempt to copy existing models if they exist."
+  PULL_FAILED=true
+  SKIP_MODEL_PULL=true
+fi
 
-# Stop server
-kill "$SERVE_PID" || true
-wait "$SERVE_PID" 2>/dev/null || true
+# Wait a bit more for server to be ready
+sleep 2
 
+# Pull all models (unless we're skipping)
+if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
+  log "Pulling $MODEL_COUNT model(s): ${OLLAMA_MODELS}"
+  log "This may take a while, especially for large models like mixtral:8x7b (~26GB)..."
+  PULL_FAILED=false
+  for model in "${MODEL_ARRAY[@]}"; do
+    log "Pulling model: $model ..."
+    if ! ollama pull "$model"; then
+      log "WARNING: Failed to pull $model. Continuing with other models..."
+      PULL_FAILED=true
+    else
+      log "Successfully pulled $model"
+    fi
+  done
+
+  # Stop server
+  log "Stopping Ollama server..."
+  kill "$SERVE_PID" 2>/dev/null || true
+  wait "$SERVE_PID" 2>/dev/null || true
+  sleep 1
+else
+  log "Skipping model pulling (server not available or extraction failed)"
+  PULL_FAILED=true
+fi
+
+# Always copy models, even if pulling failed (they might already exist)
 log "Copying \$HOME/.ollama into bundle..."
 mkdir -p "$BUNDLE_DIR/models"
-rsync -a --delete "$HOME/.ollama/" "$BUNDLE_DIR/models/.ollama/"
 
-# Calculate total size
-TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
-log "Model data copied. Total size: $TOTAL_SIZE"
-log "Models bundled: ${OLLAMA_MODELS}"
-log "Note: mistral:7b-instruct ~4GB, mixtral:8x7b ~26GB, mistral:7b-instruct-q4_K_M ~2GB"
+MODELS_COPIED=false
+if [[ ! -d "$HOME/.ollama" ]]; then
+  log "WARNING: ~/.ollama directory does not exist. Models were not pulled."
+  if [[ "$PULL_FAILED" == "true" ]]; then
+    log "WARNING: Model pulling failed. Check logs: $BUNDLE_DIR/logs/ollama_serve.log"
+  fi
+  mark_failed "models"
+else
+  # Use rsync to copy models
+  if rsync -a --delete "$HOME/.ollama/" "$BUNDLE_DIR/models/.ollama/"; then
+    TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
+    log "Models copied successfully. Total size: $TOTAL_SIZE"
+    log "Models bundled: ${OLLAMA_MODELS}"
+    log "Note: mistral:7b-instruct ~4GB, mixtral:8x7b ~26GB, mistral:7b-instruct-q4_K_M ~2GB"
+    mark_success "models"
+    MODELS_COPIED=true
+  else
+    log "ERROR: Failed to copy models. Check disk space and permissions."
+    mark_failed "models"
+  fi
+fi
+
+# If models weren't copied but exist, offer to copy them
+if [[ "$MODELS_COPIED" == "false" ]] && [[ -d "$HOME/.ollama/models" ]] && [[ -n "$(ls -A "$HOME/.ollama/models" 2>/dev/null)" ]]; then
+  EXISTING_SIZE=$(du -sh "$HOME/.ollama/models" 2>/dev/null | cut -f1 || echo "unknown")
+  log ""
+  log "⚠️  Found existing models in ~/.ollama/models ($EXISTING_SIZE) that weren't copied."
+  log "   To copy them now, run:"
+  log "   mkdir -p $BUNDLE_DIR/models"
+  log "   rsync -av --progress ~/.ollama/ $BUNDLE_DIR/models/.ollama/"
+  log ""
+fi
 
 # ============
 # 3) VSCodium .deb + published .sha256, then verify
@@ -259,11 +461,20 @@ urllib.request.urlretrieve(assets[deb], outdir/deb)
 urllib.request.urlretrieve(assets[sha], outdir/sha)
 print("Downloaded:", deb, "and", sha)
 PY
-
-log "Verifying VSCodium sha256..."
-# .sha256 is usually in the form "<hash>  <filename>"
-sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256
-log "VSCodium verified."
+VSCODIUM_DL_STATUS=$?
+if [[ $VSCODIUM_DL_STATUS -eq 0 ]]; then
+  # .sha256 is usually in the form "<hash>  <filename>"
+  if sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256; then
+    log "VSCodium verified."
+    mark_success "vscodium"
+  else
+    log "ERROR: VSCodium SHA256 verification failed"
+    mark_failed "vscodium"
+  fi
+else
+  log "ERROR: Failed to download VSCodium. Continuing with other components..."
+  mark_failed "vscodium"
+fi
 
 # ============
 # 4) Continue.dev VSIX from Open VSX + sha256 resource, then verify
@@ -307,10 +518,19 @@ print("Version:", version)
 print("Downloaded:", vsix_name)
 print("SHA256 URL:", sha256_url)
 PY
-
-log "Verifying Continue VSIX sha256..."
-sha256_check_file "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256
-log "Continue VSIX verified."
+CONTINUE_DL_STATUS=$?
+if [[ "$CONTINUE_DL_STATUS" -eq 0 ]]; then
+  if sha256_check_file "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256; then
+    log "Continue VSIX verified."
+    mark_success "continue"
+  else
+    log "ERROR: Continue VSIX SHA256 verification failed"
+    mark_failed "continue"
+  fi
+else
+  log "ERROR: Failed to download Continue VSIX. Continuing with other components..."
+  mark_failed "continue"
+fi
 
 # ============
 # 5) Python Extension VSIX from Open VSX + sha256, then verify
@@ -351,10 +571,20 @@ print("Version:", version)
 print("Downloaded:", vsix_name)
 print("SHA256 URL:", sha256_url)
 PY
+PYTHON_EXT_DL_STATUS=$?
 
-log "Verifying Python extension VSIX sha256..."
-sha256_check_file "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256
-log "Python extension VSIX verified."
+if [[ $PYTHON_EXT_DL_STATUS -eq 0 ]]; then
+  if sha256_check_file "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256; then
+    log "Python extension VSIX verified."
+    mark_success "python_ext"
+  else
+    log "ERROR: Python extension VSIX SHA256 verification failed"
+    mark_failed "python_ext"
+  fi
+else
+  log "ERROR: Failed to download Python extension VSIX. Continuing with other components..."
+  mark_failed "python_ext"
+fi
 
 # ============
 # 6) Rust Analyzer Extension VSIX from Open VSX + sha256, then verify
@@ -395,18 +625,27 @@ print("Version:", version)
 print("Downloaded:", vsix_name)
 print("SHA256 URL:", sha256_url)
 PY
+RUST_EXT_DL_STATUS=$?
 
-log "Verifying Rust Analyzer extension VSIX sha256..."
-sha256_check_file "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256
-log "Rust Analyzer extension VSIX verified."
+if [[ $RUST_EXT_DL_STATUS -eq 0 ]]; then
+  if sha256_check_file "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256; then
+    log "Rust Analyzer extension VSIX verified."
+    mark_success "rust_ext"
+  else
+    log "ERROR: Rust Analyzer extension VSIX SHA256 verification failed"
+    mark_failed "rust_ext"
+  fi
+else
+  log "ERROR: Failed to download Rust Analyzer extension VSIX. Continuing with other components..."
+  mark_failed "rust_ext"
+fi
 
 # ============
 # 7) Offline APT repo for Lua 5.3 + common prereqs
 # ============
 # This step requires a Linux system with apt-get
 # On macOS, we'll create a note file and skip the actual repo build
-OS="$(uname -s)"
-if [[ "$OS" != "Linux" ]]; then
+if [[ "$IS_LINUX" != "true" ]]; then
   log "WARNING: Not on Linux. Skipping APT repo build."
   log "You have two options:"
   log "  1. Run this script on a Linux system (VM, container, or Pop!_OS) to build the APT repo"
@@ -556,6 +795,7 @@ EOF
   popd >/dev/null
 
   log "APT repo built."
+  mark_success "apt_repo"
 fi
 
 # ============
@@ -591,8 +831,10 @@ fi
 
 if [[ -f "$BUNDLE_DIR/rust/toolchain/rustup-init" ]] || [[ -f "$BUNDLE_DIR/rust/rustup-init" ]]; then
   log "Rust toolchain installer downloaded."
+  mark_success "rust_toolchain"
 else
   log "WARNING: rustup-init not downloaded. You may need to download it manually."
+  mark_failed "rust_toolchain"
 fi
 
 # ============
@@ -622,22 +864,21 @@ if [[ -f "$RUST_CARGO_TOML" ]]; then
     
     if [[ -d "$CRATES_DIR/vendor" ]]; then
       log "Rust crates bundled successfully."
+      mark_success "rust_crates"
     else
       log "WARNING: cargo vendor did not create vendor directory."
       log "You may need to bundle Rust crates manually on the target system."
+      mark_failed "rust_crates"
     fi
   else
     log "WARNING: cargo not found. Cannot bundle Rust crates."
     log "Install Rust first, then re-run this script to bundle crates."
     log "Or bundle crates manually on the target system using: cargo vendor"
+    mark_skipped "rust_crates"
   fi
 else
   log "No Cargo.toml found. Skipping Rust crate bundling."
-  log "To bundle Rust crates:"
-  log "  1. Create or copy Cargo.toml to the script directory"
-  log "  2. Set RUST_CARGO_TOML env var: export RUST_CARGO_TOML=/path/to/Cargo.toml"
-  log "  3. Ensure cargo is installed on the build machine"
-  log "  4. Re-run this script"
+  mark_skipped "rust_crates"
 fi
 
 # ============
@@ -717,22 +958,145 @@ except FileNotFoundError:
 except Exception as e:
     print(f"Warning: Error downloading Python packages: {e}")
 PY
-  log "Python packages downloaded (if any)."
+  # Check if any packages were downloaded
+  if [[ -n "$(ls -A "$BUNDLE_DIR/python"/*.whl "$BUNDLE_DIR/python"/*.tar.gz 2>/dev/null)" ]]; then
+    log "Python packages downloaded successfully."
+    mark_success "python_packages"
+  else
+    log "WARNING: No Python packages were downloaded."
+    mark_failed "python_packages"
+  fi
   log "Note: Source distributions will need to be built on the target Linux system."
 else
   log "No requirements.txt found. Skipping Python package download."
-  log "To bundle Python packages:"
-  log "  1. Create a requirements.txt file with your packages"
-  log "  2. Set PYTHON_REQUIREMENTS env var: export PYTHON_REQUIREMENTS=/path/to/requirements.txt"
-  log "  3. Re-run this script"
+  mark_skipped "python_packages"
 fi
 
-log "DONE. Bundle created at: $BUNDLE_DIR"
+# ============
+# Final Summary
+# ============
 log ""
-log "Bundle Summary:"
-log " - Models bundled: ${OLLAMA_MODELS}"
-log " - Total bundle size: ~32GB+ (includes all models: ~4GB + ~26GB + ~2GB + other components)"
-log " - Ensure you have sufficient disk space before copying"
+log "=========================================="
+log "BUNDLE CREATION SUMMARY"
+log "=========================================="
 log ""
-log "Next: copy $BUNDLE_DIR to an external drive."
-log "Note: The bundle is large due to multiple models. Consider using a large USB drive or external SSD."
+
+# Check each component and report status
+HAS_FAILURES=false
+HAS_WARNINGS=false
+
+# List of all components to check
+COMPONENTS="ollama_linux ollama_macos models vscodium continue python_ext rust_ext rust_toolchain rust_crates python_packages apt_repo"
+
+for component in $COMPONENTS; do
+  status="$(get_status "$component")"
+  case "$status" in
+    success)
+      log "✓ $component: SUCCESS"
+      ;;
+    failed)
+      log "✗ $component: FAILED"
+      HAS_FAILURES=true
+      ;;
+    skipped)
+      log "⊘ $component: SKIPPED (not required or not found)"
+      ;;
+    pending)
+      log "? $component: PENDING (not completed)"
+      HAS_WARNINGS=true
+      ;;
+  esac
+done
+
+log ""
+log "=========================================="
+log "BUNDLE LOCATION: $BUNDLE_DIR"
+log "=========================================="
+
+# Calculate actual sizes
+if [[ -d "$BUNDLE_DIR/models/.ollama" ]]; then
+  MODEL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
+  log "Models size: $MODEL_SIZE"
+else
+  log "Models: NOT BUNDLED"
+  HAS_WARNINGS=true
+fi
+
+TOTAL_SIZE=$(du -sh "$BUNDLE_DIR" 2>/dev/null | cut -f1 || echo "unknown")
+log "Total bundle size: $TOTAL_SIZE"
+log ""
+
+# Provide actionable next steps
+if [[ "$HAS_FAILURES" == "true" ]]; then
+  log "=========================================="
+  log "⚠️  ACTION REQUIRED: Some components failed"
+  log "=========================================="
+  log ""
+  
+  if [[ "$(get_status models)" == "failed" ]]; then
+    log "MODELS FAILED:"
+    if [[ -d "$HOME/.ollama/models" ]] && [[ -n "$(ls -A "$HOME/.ollama/models" 2>/dev/null)" ]]; then
+      EXISTING_SIZE=$(du -sh "$HOME/.ollama/models" 2>/dev/null | cut -f1 || echo "unknown")
+      log "  → Found existing models in ~/.ollama/models ($EXISTING_SIZE)"
+      log "  → To copy them manually, run:"
+      log "     mkdir -p $BUNDLE_DIR/models"
+      log "     rsync -av --progress ~/.ollama/ $BUNDLE_DIR/models/.ollama/"
+    else
+      log "  → No existing models found. You need to:"
+      log "     1. Ensure Ollama is installed and working"
+      log "     2. Pull models manually: ollama pull <model-name>"
+      log "     3. Re-run this script or copy ~/.ollama manually"
+    fi
+    log ""
+  fi
+  
+  if [[ "$(get_status vscodium)" == "failed" ]]; then
+    log "VSCODIUM FAILED:"
+    log "  → Re-run this script to retry download"
+    log "  → Or download manually from: https://github.com/VSCodium/vscodium/releases"
+    log ""
+  fi
+  
+  if [[ "$(get_status continue)" == "failed" ]] || [[ "$(get_status python_ext)" == "failed" ]] || [[ "$(get_status rust_ext)" == "failed" ]]; then
+    log "EXTENSIONS FAILED:"
+    log "  → Re-run this script to retry download"
+    log "  → Or download manually from: https://open-vsx.org"
+    log ""
+  fi
+  
+  if [[ "$(get_status rust_toolchain)" == "failed" ]]; then
+    log "RUST TOOLCHAIN FAILED:"
+    log "  → Re-run this script to retry download"
+    log "  → Or download manually from: https://rustup.rs"
+    log ""
+  fi
+  
+  if [[ "$(get_status python_packages)" == "failed" ]]; then
+    log "PYTHON PACKAGES FAILED:"
+    log "  → Check that requirements.txt exists and is valid"
+    log "  → Ensure pip is installed: python3 -m pip --version"
+    log "  → Re-run this script to retry"
+    log ""
+  fi
+  
+  log "After fixing issues, re-run: ./get_bundle.sh"
+  log ""
+fi
+
+if [[ "$HAS_WARNINGS" == "true" ]] && [[ "$HAS_FAILURES" != "true" ]]; then
+  log "⚠️  Some optional components were skipped (this is normal)"
+  log ""
+fi
+
+if [[ "$HAS_FAILURES" != "true" ]]; then
+  log "✓ All required components bundled successfully!"
+  log ""
+  log "Next steps:"
+  log "  1. Verify bundle contents: ls -lh $BUNDLE_DIR"
+  log "  2. Copy bundle to external drive or transfer to target system"
+  log "  3. On target Linux system, run: ./install_offline.sh"
+  log ""
+fi
+
+log "Bundle location: $BUNDLE_DIR"
+log ""
