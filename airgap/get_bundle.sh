@@ -232,7 +232,8 @@ PY
   mkdir -p "$TMP_OLLAMA"
   
   # Handle different archive formats or direct binary
-  MACOS_BINARY="$(ls "$BUNDLE_DIR/ollama"/ollama-*darwin* "$BUNDLE_DIR/ollama"/ollama-*mac* 2>/dev/null | head -n1)"
+  # Use find to avoid glob expansion issues when no files match
+  MACOS_BINARY="$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -type f \( -name "*darwin*" -o -name "*mac*" \) 2>/dev/null | head -n1)"
   if [[ -z "$MACOS_BINARY" ]]; then
     log "ERROR: Could not find downloaded macOS Ollama binary"
     log "Skipping model pulling - macOS binary not found"

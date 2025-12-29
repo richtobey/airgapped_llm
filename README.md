@@ -22,29 +22,28 @@ Everything works **completely offline** - no internet connection required after 
 ## 📁 Project Structure
 
 ```bash
-airgap/
+airgapped_llm/
 ├── airgap/              # Airgap bundle scripts (for System76 Pop!_OS)
 │   ├── get_bundle.sh   # Create airgap bundle
 │   ├── install_offline.sh  # Install bundle on airgapped system
 │   ├── requirements.txt    # Python dependencies
 │   ├── requirements.txt.example
+│   ├── archive/        # Archive scripts for model management
+│   │   ├── copy_models.sh
+│   │   └── download_missing.sh
 │   ├── docs/           # Documentation
 │   │   ├── AIRGAP_REVIEW.md
 │   │   ├── AIRGAP_PACKAGES.md
 │   │   ├── MODEL_RECOMMENDATIONS.md
 │   │   └── SYSTEM_LIBRARIES.md
-│   └── README.md
-├── vm/                  # VM bundle scripts (for creating test VMs)
-│   ├── get_vm_bundle.sh    # Create VM bundle
-│   ├── install_vm.sh       # Install VM on airgapped host
-│   ├── scripts/            # Helper scripts
-│   │   ├── create_vm_image.sh
-│   │   └── install_popos_vm.sh
+│   ├── airgap_bundle/  # Generated bundle directory (created by get_bundle.sh)
 │   └── README.md
 ├── mac/                 # Mac testing scripts
 │   ├── setup_mac_vm.sh  # Setup QEMU/VM on macOS for testing
 │   ├── cleanup_mac_vm.sh # Remove VM and cleanup
 │   └── README.md
+├── LICENSE              # MIT License
+├── airgap.code-workspace  # VS Code workspace configuration
 └── README.md           # This file
 ```
 
@@ -61,20 +60,11 @@ airgap/
 ### For Installation (Airgapped System)
 
 **Direct Installation:**
+
 - **Pop!_OS or Ubuntu/Debian-based Linux** (amd64)
 - **sudo access** (for installing packages)
 - **Disk space**: ~35GB+ for bundle + installation space
 - **Optional**: NVIDIA GPU with 16GB+ VRAM (for GPU acceleration)
-
-**VM Bundle Installation:**
-- **Any Linux system** with QEMU support (x86_64, ARM64, or other)
-- **macOS** (Intel or Apple Silicon) with QEMU installed via Homebrew
-- **CPU with virtualization support** (Intel VT-x or AMD-V) for KVM acceleration on x86_64 Linux
-- **Note**: On ARM64 Macs, x86_64 emulation will be used (slower than native)
-- **sudo access** (for installing QEMU/KVM on Linux)
-- **Disk space**: ~60GB+ for VM bundle + VM disk image
-- **RAM**: Host needs 4GB+ free (VM uses 4GB by default)
-- **Optional**: NVIDIA GPU with 16GB+ VRAM (for GPU passthrough to VM on x86_64 hosts)
 
 ## 🚀 Quick Start
 
@@ -104,6 +94,8 @@ export OLLAMA_MODELS="mistral:7b-instruct"
 The bundle will be created in `./airgap_bundle/` (or `$BUNDLE_DIR` if set).
 
 #### Step 2: Transfer Bundle to Airgapped System
+
+Move the drive to your air gapped system.
 
 ```bash
 # Copy the entire bundle directory to external drive/USB
@@ -139,79 +131,7 @@ codium
 # The Continue extension will automatically use Ollama for AI assistance
 ```
 
-### Method 2: VM Bundle (Pre-configured Virtual Machine)
-
-This method creates a complete VM bundle that can be transferred to an airgapped system. See the [VM Bundle section](#-vm-bundle-workflow) for details.
-
-#### Step 1: Create VM Bundle (On Online Machine)
-
-```bash
-# Clone or download this repository
-cd airgap
-
-# Navigate to VM bundle scripts
-cd vm
-
-# Create VM bundle (includes Pop!_OS VM + airgap bundle)
-./get_vm_bundle.sh
-
-# This will:
-# - Download Pop!_OS ISO (~3GB, x86_64 version)
-# - Create VM disk image (x86_64 target)
-# - Install Pop!_OS in VM (requires manual interaction)
-# - Create nested airgap bundle (calls airgap/get_bundle.sh)
-# - Total size: ~55-60GB
-
-# Note: On Apple Silicon Macs, this uses x86_64 emulation.
-#       Installation will be slower but will work correctly.
-#       The resulting VM will be x86_64 regardless of host architecture.
-```
-
-The VM bundle will be created in `./vm_bundle/` (or `$VM_BUNDLE_DIR` if set).
-
-#### Step 2: Transfer VM Bundle to Airgapped System
-
-```bash
-# Copy the entire VM bundle directory to external drive/USB
-# Ensure you have a drive with 60GB+ free space
-cp -r vm_bundle /path/to/external/drive/
-```
-
-#### Step 3: Install VM on Airgapped System
-
-```bash
-# On the airgapped Linux system (any distro with QEMU/KVM support)
-cd /path/to/vm_bundle
-
-# Install QEMU/KVM and set up VM
-./install_vm.sh
-
-# Or specify custom bundle location
-VM_BUNDLE_DIR=/path/to/vm_bundle ./install_vm.sh
-```
-
-#### Step 4: Start VM and Use
-
-```bash
-# Start the VM
-./scripts/start_vm.sh
-
-# Or use the installed script
-~/.local/share/vm/popos-airgap/start_vm.sh
-
-# Inside the VM (Pop!_OS):
-# 1. Navigate to airgap bundle
-cd /path/to/vm_bundle/airgap_bundle
-
-# 2. Install airgap bundle (if not pre-installed)
-sudo ./install_offline.sh
-
-# 3. Start using tools
-ollama serve
-codium
-```
-
-### Method 3: macOS Testing Environment (For Development)
+### Method 2: macOS Testing Environment (For Development)
 
 Set up a Pop!_OS VM on macOS to test airgap scripts before deploying to production.
 
@@ -227,19 +147,11 @@ cd mac
 # This will:
 # - Install QEMU via Homebrew (if not installed)
 # - Download Pop!_OS ISO (~3GB)
-# - Create VM disk image
-# - Generate startup scripts
 ```
 
-#### Step 2: Install Pop!_OS in VM
+#### Step 2: Setup UTM from the Apple Store and then install POP_OS!
 
-```bash
-# Run the installation helper
-./scripts/install_popos.sh
-
-# Follow the on-screen instructions in the QEMU window
-# Complete the Pop!_OS installation manually
-```
+View the [readme](mac/README.md) to setup POP_OS! on your Mac
 
 #### Step 3: Start VM and Test
 
@@ -252,19 +164,12 @@ cd mac
 # 2. Navigate to bundle and test installation:
 cd /path/to/airgap_bundle
 sudo ./install_offline.sh
-```
 
-#### Step 4: Cleanup (Optional)
-
-```bash
-# Remove VM directory and start fresh
-./cleanup_mac_vm.sh
-
-# Or remove VM and QEMU
-./cleanup_mac_vm.sh --remove-qemu
+# run software installed with the bundle.
 ```
 
 **Note for Apple Silicon Macs:**
+
 - Uses x86_64 Pop!_OS (NVIDIA variant) in emulation mode for production testing
 - **Why NVIDIA variant on Mac?** Macs don't have NVIDIA GPUs, but we use the NVIDIA variant ISO because:
   - It's the exact same ISO deployed to System76 machines
@@ -302,6 +207,7 @@ See [`mac/README.md`](mac/README.md) for detailed macOS-specific documentation.
 ### System Libraries
 
 30+ system library packages including:
+
 - Math libraries (BLAS, LAPACK, OpenBLAS) for numpy/scipy
 - SSL/TLS libraries for network packages
 - Image processing libraries for matplotlib/pillow
@@ -313,6 +219,7 @@ See [`mac/README.md`](mac/README.md) for detailed macOS-specific documentation.
 ### Python Packages
 
 All packages from `requirements.txt` plus all transitive dependencies:
+
 - Code quality: black, ruff, mypy, pylint
 - Testing: pytest, pytest-cov, pytest-mock
 - Data science: numpy, pandas
@@ -347,33 +254,6 @@ export PYTHON_REQUIREMENTS="/path/to/requirements.txt"
 export RUST_CARGO_TOML="/path/to/Cargo.toml"
 ```
 
-#### VM Bundle Creation (`vm/get_vm_bundle.sh`)
-
-```bash
-# VM bundle directory location
-export VM_BUNDLE_DIR="/path/to/vm_bundle"
-
-# VM disk size (default: 50G)
-export VM_DISK_SIZE="60G"
-
-# VM memory (default: 4G)
-export VM_MEMORY="8G"
-
-# VM CPU count (default: 2)
-export VM_CPUS="4"
-
-# Pop!_OS version/ISO URL (optional, auto-detected if not set)
-export POPOS_VERSION="22.04"
-# Or: export POPOS_VERSION="https://iso.pop-os.org/22.04/pop-os_22.04_amd64_nvidia.iso"
-
-# Whether to pre-install airgap bundle in VM (default: true)
-export PREINSTALL_AIRGAP="true"
-
-# All airgap/get_bundle.sh variables also apply (for nested airgap bundle)
-export OLLAMA_MODELS="mistral:7b-instruct"
-export PYTHON_REQUIREMENTS="/path/to/requirements.txt"  # Default: airgap/requirements.txt
-```
-
 #### Installation (`airgap/install_offline.sh`)
 
 ```bash
@@ -382,16 +262,6 @@ export BUNDLE_DIR="/path/to/airgap_bundle"
 
 # Installation prefix for Ollama
 export INSTALL_PREFIX="/usr/local/bin"
-```
-
-#### VM Installation (`vm/install_vm.sh`)
-
-```bash
-# VM bundle directory location
-export VM_BUNDLE_DIR="/path/to/vm_bundle"
-
-# VM installation directory (default: ~/.local/share/vm/popos-airgap)
-export VM_INSTALL_DIR="/path/to/vm/installation"
 ```
 
 #### macOS VM Setup (`mac/setup_mac_vm.sh`)
@@ -418,13 +288,15 @@ export POPOS_VERSION="22.04"
 ### Adding Python Packages
 
 1. Edit `airgap/requirements.txt`:
+
 ```bash
 numpy>=1.26.0
 pandas>=2.1.0
 your-package>=1.0.0
 ```
 
-2. Re-run bundle creation:
+1. Re-run bundle creation:
+
 ```bash
 cd airgap
 ./get_bundle.sh
@@ -433,6 +305,7 @@ cd airgap
 ### Adding Rust Crates
 
 1. Create or copy `Cargo.toml` to the project root
+
 2. Re-run bundle creation:
 ```bash
 cd airgap
@@ -443,6 +316,7 @@ cd airgap
 
 1. Edit `airgap/get_bundle.sh`, find `APT_PACKAGES` array (around line 410)
 2. Add your packages:
+
 ```bash
 APT_PACKAGES=(
   # ... existing packages ...
@@ -451,11 +325,12 @@ APT_PACKAGES=(
 )
 ```
 
-3. Re-run on Linux machine to rebuild APT repo
+1. Re-run on Linux machine to rebuild APT repo
 
 ### Selecting Models
 
 **For 16GB VRAM:**
+
 ```bash
 cd airgap
 export OLLAMA_MODELS="mistral:7b-instruct mistral:7b-instruct-q4_K_M"
@@ -463,6 +338,7 @@ export OLLAMA_MODELS="mistral:7b-instruct mistral:7b-instruct-q4_K_M"
 ```
 
 **For 24GB+ VRAM:**
+
 ```bash
 cd airgap
 export OLLAMA_MODELS="mistral:7b-instruct mixtral:8x7b"
@@ -470,6 +346,7 @@ export OLLAMA_MODELS="mistral:7b-instruct mixtral:8x7b"
 ```
 
 **Single model (smallest bundle):**
+
 ```bash
 cd airgap
 export OLLAMA_MODEL="mistral:7b-instruct"
@@ -484,6 +361,7 @@ If building the bundle on macOS, the APT repository won't be created automatical
 
 1. Copy `airgap_bundle/aptrepo/` to a Linux machine
 2. Build the repo:
+
 ```bash
 cd airgap_bundle/aptrepo
 sudo apt-get update
@@ -496,6 +374,7 @@ gzip -kf Packages
 ### Option 2: Build on Target System
 
 If the target system has temporary internet access:
+
 1. Run `install_offline.sh`
 2. When prompted about missing APT repo, choose to build it
 3. Follow the instructions
@@ -507,6 +386,7 @@ If the target system has temporary internet access:
 **Problem**: Some packages fail to install
 
 **Solutions**:
+
 - Check that system libraries are installed (they should be from APT repo)
 - Verify build tools are installed: `gcc --version`
 - Check Python version: `python3 --version`
@@ -517,6 +397,7 @@ If the target system has temporary internet access:
 **Problem**: `rustc` or `cargo` not in PATH
 
 **Solutions**:
+
 ```bash
 # Add to ~/.bashrc or ~/.zshrc
 source ~/.cargo/env
@@ -530,10 +411,12 @@ export PATH="$HOME/.cargo/bin:$PATH"
 **Problem**: Ollama using CPU instead of GPU
 
 **Solutions**:
+
 1. Verify NVIDIA drivers: `nvidia-smi`
 2. Verify CUDA: `nvcc --version`
 3. Check Ollama logs: `tail -f ~/.ollama/logs/server.log`
 4. Force GPU usage:
+
 ```bash
 export OLLAMA_NUM_GPU=1
 ollama serve
@@ -544,6 +427,7 @@ ollama serve
 **Problem**: `apt-get update` shows errors about other sources
 
 **Solutions**:
+
 - This is normal on airgapped systems - other sources will fail
 - The local `file://` source will work regardless
 - Errors can be ignored if local repo works
@@ -553,6 +437,7 @@ ollama serve
 **Problem**: Bundle exceeds available space
 
 **Solutions**:
+
 - Bundle fewer models: `export OLLAMA_MODELS="mistral:7b-instruct"`
 - Remove large models from bundle after creation
 - Use external drive with more space
@@ -563,6 +448,7 @@ ollama serve
 **Problem**: QEMU fails to start VM
 
 **Solutions**:
+
 - Check QEMU installation: `qemu-system-x86_64 --version` (must be x86_64 version)
 - Check VM disk exists: `ls -lh ~/.local/share/vm/popos-airgap/popos-airgap.qcow2`
 - On x86_64 Linux: Check KVM support: `ls -l /dev/kvm` and `grep -E '(vmx|svm)' /proc/cpuinfo`
@@ -575,6 +461,7 @@ ollama serve
 **Problem**: VM performance is poor on macOS
 
 **Solutions**:
+
 - **Apple Silicon Macs**: This is expected - uses x86_64 emulation for production testing
   - Performance is slower but ensures accurate testing of production scripts
   - Consider using `mac/setup_mac_vm.sh` which is optimized for macOS testing
@@ -589,6 +476,7 @@ ollama serve
 **Problem**: Pop!_OS installation in VM is not fully automated
 
 **Solutions**:
+
 - This is expected - Pop!_OS installer requires manual interaction
 - Follow the on-screen instructions in the QEMU window
 - The installation script will guide you through the process
@@ -610,6 +498,7 @@ ollama serve
 | **Total** | **~35GB+** |
 
 To reduce size, bundle only needed models:
+
 - Single model (mistral:7b-instruct): ~5GB total
 - Two models (mistral variants): ~7GB total
 
@@ -638,6 +527,7 @@ The VM bundle provides a complete virtualized environment with Pop!_OS pre-insta
 ### VM Bundle Architecture
 
 The VM bundle uses a **nested approach**:
+
 1. `vm/get_vm_bundle.sh` creates the VM bundle
 2. Inside the VM bundle, it calls `airgap/get_bundle.sh` to create the airgap bundle
 3. The airgap bundle is nested inside `vm_bundle/airgap_bundle/`
@@ -647,21 +537,25 @@ The VM bundle uses a **nested approach**:
 ### QEMU/KVM Requirements
 
 **Target Architecture:**
+
 - **Always x86_64/amd64** - The VM bundle always creates x86_64 VMs regardless of host architecture
 
 **Hardware Requirements:**
+
 - **x86_64 Linux hosts**: CPU with virtualization support (Intel VT-x or AMD-V) for KVM acceleration
 - **ARM64 Macs**: No special hardware needed (uses software emulation)
 - `/dev/kvm` device available on x86_64 Linux (requires kernel module)
 - Sufficient RAM: Host needs VM memory (4GB default) + overhead
 
 **Software Requirements:**
+
 - QEMU installed on host system (`qemu-system-x86_64` and `qemu-img`)
   - Linux: `sudo apt-get install qemu-system-x86 qemu-utils qemu-kvm`
   - macOS: `brew install qemu`
 - User in `kvm` group (for KVM acceleration on x86_64 Linux hosts)
 
 **Architecture-Specific Notes:**
+
 - **x86_64 Linux**: Uses KVM acceleration (fast, near-native performance)
 - **x86_64 Mac**: Uses TCG emulation (slower, but works)
 - **ARM64 Mac**: Uses x86_64 emulation via QEMU TCG (slowest, but functional)
@@ -669,6 +563,7 @@ The VM bundle uses a **nested approach**:
   - VM will work but installation and operation will be slower
 
 **Checking KVM Support (x86_64 Linux only):**
+
 ```bash
 # Check CPU virtualization flags
 grep -E '(vmx|svm)' /proc/cpuinfo
@@ -683,20 +578,24 @@ groups | grep kvm
 ### VM Management
 
 **Starting the VM:**
+
 ```bash
 cd /path/to/vm_bundle
 ./scripts/start_vm.sh
 ```
 
 **Stopping the VM:**
+
 - Shut down Pop!_OS from within the VM (normal shutdown)
 - Or use QEMU monitor: `Ctrl+Alt+2` then `quit`
 
 **Accessing VM Files:**
+
 - VM disk is at: `~/.local/share/vm/popos-airgap/popos-airgap.qcow2`
 - You can mount the qcow2 image using `qemu-nbd` or `guestmount` (libguestfs)
 
 **VM Configuration:**
+
 - Default memory: 4GB (set via `VM_MEMORY` env var)
 - Default CPUs: 2 (set via `VM_CPUS` env var)
 - Default disk: 50GB (set via `VM_DISK_SIZE` env var)
@@ -712,6 +611,7 @@ For GPU acceleration inside the VM, you can configure GPU passthrough:
    - VFIO kernel modules
 
 2. **QEMU Arguments:**
+
    ```bash
    -device vfio-pci,host=XX:XX.X  # Replace with GPU PCI address
    ```
@@ -737,18 +637,19 @@ For GPU acceleration inside the VM, you can configure GPU passthrough:
 - `vm/README.md` - VM bundle scripts documentation
 - `mac/README.md` - Mac testing scripts documentation
 
-## 🤝 Contributing
-
-To add support for additional components:
-
-1. Add download logic to `airgap/get_bundle.sh`
-2. Add installation logic to `airgap/install_offline.sh`
-3. Update this README
-4. Test on both macOS (bundle creation) and Linux (installation)
-
 ## 📄 License
 
-This project is provided as-is for creating airgapped development environments.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+**MIT License** - A very permissive license that allows:
+- ✅ Commercial use
+- ✅ Modification
+- ✅ Distribution
+- ✅ Private use
+- ✅ Patent use
+- ✅ Sublicensing
+
+The only requirement is to include the original copyright notice and license text.
 
 ## 🙏 Acknowledgments
 
@@ -778,8 +679,3 @@ This project is provided as-is for creating airgapped development environments.
 8. **Architecture**: VM bundle always targets x86_64/amd64 architecture. On ARM64 Macs, QEMU will use x86_64 emulation (slower than native but works correctly).
 
 ---
-
-**Ready to create your airgapped development environment?**
-
-- **Direct installation**: Start with `airgap/get_bundle.sh` on an online machine
-- **VM bundle**: Start with `vm/get_vm_bundle.sh` on an online machine (includes Pop!_OS VM)
