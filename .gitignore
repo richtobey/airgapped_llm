@@ -1,2 +1,12 @@
 airgap_bundle/
+airgap_bundle_old/
+transfer.qcow2
+iso/
+logs/
+.DS_Store
+.vscode/
+.idea/
+.pytest_cache/
+.pytest_cache/
+.DS_Store
 

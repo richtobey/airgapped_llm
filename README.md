@@ -42,6 +42,17 @@ airgapped_llm/
 │   ├── setup_mac_vm.sh  # Setup QEMU/VM on macOS for testing
 │   ├── cleanup_mac_vm.sh # Remove VM and cleanup
 │   └── README.md
+├── backup/              # VM backup and restore tools
+│   ├── create_backup_usb.sh  # Create bootable USB with backup tools
+│   ├── backup_vm.sh     # Backup UTM VM disk
+│   ├── restore_vm.sh    # Restore VM from backup
+│   ├── verify_backup.sh # Verify backup integrity
+│   └── README.md
+├── kvm/                 # UTM to KVM migration tools
+│   ├── convert_utm_to_kvm.sh  # Convert UTM disk to KVM format
+│   ├── setup_kvm_vm.sh  # Set up KVM VM from converted disk
+│   ├── migrate_vm.sh    # Complete migration workflow
+│   └── README.md
 ├── LICENSE              # MIT License
 ├── airgap.code-workspace  # VS Code workspace configuration
 └── README.md           # This file
@@ -533,8 +544,9 @@ To reduce size, bundle only needed models:
 - `airgap/docs/MODEL_RECOMMENDATIONS.md` - AI model selection guide
 - `airgap/docs/SYSTEM_LIBRARIES.md` - System library explanations
 - `airgap/README.md` - Airgap bundle scripts documentation
-- `vm/README.md` - VM bundle scripts documentation
 - `mac_vm/README.md` - Mac VM testing scripts documentation
+- `backup/README.md` - VM backup and restore documentation
+- `kvm/README.md` - UTM to KVM migration guide
 
 ## 📄 License
 
