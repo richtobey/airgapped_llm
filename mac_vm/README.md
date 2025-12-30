@@ -153,8 +153,50 @@ The bundle will be created in `./airgap_bundle/` with all components pre-built.
 ### Step 7: Install SPICE guest agent tools
 
 ```bash
-sudo apt update
-sudo apt install spice-vdagent -y
+sudo apt-get update
+sudo apt-get install spice-vdagent -y
+# reboot
+```
+
+Step 8: Create a Transfer Disk
+
+```bash
+# on mac
+qemu-img create -f qcow2 transfer.qcow2 100G
+# attach it to vm
+# 1. Shut down the Pop!_OS VM completely
+# 2. Select the VM → Edit
+# 3. Go to Storage
+# 4. Click Add → Drive
+# 5. Choose transfer.qcow2
+# 6. Interface: VirtIO
+# 7. Save
+# 8. Now start the VM.
+
+lblsk
+# look for name of your drive, ex. vda
+sudo apt-get update
+sudo apt-get install exfatprogs -y
+# verify it
+which mkfs.exfat
+# format it
+sudo mkfs.exfat /dev/vda
+sudo mkdir -p /mnt/transfer
+sudo mount /dev/vda /mnt/transfer
+# check it
+df -h | grep transfer
+ls -la /mnt/transfer
+# use the drive
+# for permanent mount inside the vm
+# get the uuid
+lsblk -f
+sudo nano /etc/fstab
+# example record UUID=1A2B-3C4D  /mnt/transfer  exfat  defaults,uid=1000,gid=1000,nofail  0  0
+
+
+
+ls /Volumes # see it
+diskutil eject /Volumes/TRANSFER # eject it
 ```
 
 ### Step 8: Install Airgap Bundle
