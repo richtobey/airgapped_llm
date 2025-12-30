@@ -354,16 +354,6 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]] && ! command -v ollama >/dev/null
     SKIP_MODEL_PULL=true
   fi
 fi
-  mark_failed "models"
-  # Skip to copying existing models if they exist
-  if [[ -d "$HOME/.ollama/models" ]] && [[ -n "$(ls -A "$HOME/.ollama/models" 2>/dev/null)" ]]; then
-    EXISTING_SIZE=$(du -sh "$HOME/.ollama/models" 2>/dev/null | cut -f1 || echo "unknown")
-    log "Found existing models in ~/.ollama/models ($EXISTING_SIZE) - will attempt to copy them"
-    MODELS_EXIST=true
-  fi
-  # Jump to model copying section
-  SKIP_MODEL_PULL=true
-fi
 
 # Kill any existing ollama server to avoid conflicts
 pkill -f "ollama serve" 2>/dev/null || true
@@ -441,19 +431,18 @@ if [[ "${SKIP_MODEL_PULL:-true}" != "true" ]]; then
         log "Successfully pulled $model"
       fi
     done
-  fi
-fi
 
-  # Stop server (if it was started)
-  if [[ -n "${SERVE_PID:-}" ]]; then
-    log "Stopping Ollama server..."
-    kill "$SERVE_PID" 2>/dev/null || true
-    wait "$SERVE_PID" 2>/dev/null || true
-    sleep 1
+    # Stop server (if it was started)
+    if [[ -n "${SERVE_PID:-}" ]]; then
+      log "Stopping Ollama server..."
+      kill "$SERVE_PID" 2>/dev/null || true
+      wait "$SERVE_PID" 2>/dev/null || true
+      sleep 1
+    fi
+  else
+    log "Skipping model pulling (server not available or extraction failed)"
+    PULL_FAILED=true
   fi
-else
-  log "Skipping model pulling (server not available or extraction failed)"
-  PULL_FAILED=true
 fi
 
 # Always copy/move models, even if pulling failed (they might already exist)
