@@ -66,6 +66,10 @@ get_status() {
 # ============
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 ARCH="amd64"
+# Debug log path - use bundle directory which works on both Mac and Linux
+DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/debug.log}"
+# Ensure debug log directory exists
+mkdir -p "$(dirname "$DEBUG_LOG")" 2>/dev/null || true
 # Models to bundle (space-separated list)
 # Default: Bundle all recommended models for different VRAM configurations
 # - mistral:7b-instruct: Best for 16GB VRAM (~4GB download, ~13.7GB VRAM)
@@ -107,13 +111,13 @@ sha256_check_vsix() {
   local sha_file="$2"
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_vsix1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:entry\",\"message\":\"VSIX verification started\",\"data\":{\"file\":\"$file\",\"sha_file\":\"$sha_file\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_vsix1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:entry\",\"message\":\"VSIX verification started\",\"data\":{\"file\":\"$file\",\"sha_file\":\"$sha_file\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   if [[ ! -f "$file" ]]; then
     log "ERROR: VSIX file not found: $file"
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_vsix2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:file_missing\",\"message\":\"VSIX file not found\",\"data\":{\"file\":\"$file\",\"exists\":false},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-D\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+    echo "{\"id\":\"log_$(date +%s)_vsix2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:file_missing\",\"message\":\"VSIX file not found\",\"data\":{\"file\":\"$file\",\"exists\":false},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
     # #endregion
     return 1
   fi
@@ -121,7 +125,7 @@ sha256_check_vsix() {
   if [[ ! -f "$sha_file" ]]; then
     log "ERROR: SHA256 file not found: $sha_file"
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_vsix3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:sha_missing\",\"message\":\"SHA256 file not found\",\"data\":{\"sha_file\":\"$sha_file\",\"exists\":false},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-D\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+    echo "{\"id\":\"log_$(date +%s)_vsix3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:sha_missing\",\"message\":\"SHA256 file not found\",\"data\":{\"sha_file\":\"$sha_file\",\"exists\":false},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
     # #endregion
     return 1
   fi
@@ -133,7 +137,7 @@ sha256_check_vsix() {
   expected_hash=$(head -n1 "$sha_file" | awk '{print $1}' | tr -d '[:space:]')
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_vsix4\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:read_hash\",\"message\":\"Read expected hash from file\",\"data\":{\"sha_file_content\":\"${sha_file_content:0:100}\",\"expected_hash\":\"${expected_hash:0:32}\",\"expected_length\":${#expected_hash},\"file_size\":$(stat -f%z "$file" 2>/dev/null || echo 0)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A,VSIX-C\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_vsix4\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:read_hash\",\"message\":\"Read expected hash from file\",\"data\":{\"sha_file_content\":\"${sha_file_content:0:100}\",\"expected_hash\":\"${expected_hash:0:32}\",\"expected_length\":${#expected_hash},\"file_size\":$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo 0)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A,VSIX-C\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   if [[ -z "$expected_hash" ]]; then
@@ -151,7 +155,7 @@ sha256_check_vsix() {
   fi
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_vsix5\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:calculated_hash\",\"message\":\"Calculated actual hash\",\"data\":{\"actual_hash\":\"${actual_hash:0:32}\",\"actual_length\":${#actual_hash},\"file_path\":\"$file\",\"file_exists\":$(test -f "$file" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-B,VSIX-D\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_vsix5\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:calculated_hash\",\"message\":\"Calculated actual hash\",\"data\":{\"actual_hash\":\"${actual_hash:0:32}\",\"actual_length\":${#actual_hash},\"file_path\":\"$file\",\"file_exists\":$(test -f "$file" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-B,VSIX-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   if [[ -z "$actual_hash" ]]; then
@@ -164,7 +168,7 @@ sha256_check_vsix() {
   local actual_lower="${actual_hash,,}"
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_vsix6\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:compare\",\"message\":\"Comparing hashes\",\"data\":{\"expected_lower\":\"${expected_lower:0:32}\",\"actual_lower\":\"${actual_lower:0:32}\",\"match\":$(test "$expected_lower" == "$actual_lower" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A,VSIX-E\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_vsix6\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:compare\",\"message\":\"Comparing hashes\",\"data\":{\"expected_lower\":\"${expected_lower:0:32}\",\"actual_lower\":\"${actual_lower:0:32}\",\"match\":$(test "$expected_lower" == "$actual_lower" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A,VSIX-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   if [[ "$expected_lower" == "$actual_lower" ]]; then
@@ -272,14 +276,14 @@ mkdir -p "$TMP_OLLAMA"
 log "Extracting Ollama binary from tarball..."
 
 # #region agent log
-echo "{\"id\":\"log_$(date +%s)_ollama1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:entry\",\"message\":\"Starting Ollama extraction\",\"data\":{\"tarball\":\"$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz\",\"dest\":\"$TMP_OLLAMA\",\"tarball_exists\":$(test -f "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+echo "{\"id\":\"log_$(date +%s)_ollama1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:entry\",\"message\":\"Starting Ollama extraction\",\"data\":{\"tarball\":\"$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz\",\"dest\":\"$TMP_OLLAMA\",\"tarball_exists\":$(test -f "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
 # #endregion
 
 TAR_OUTPUT=$(tar -xzf "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" -C "$TMP_OLLAMA" 2>&1)
 TAR_EXIT=$?
 
 # #region agent log
-echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
 # #endregion
 
 if [[ $TAR_EXIT -ne 0 ]]; then
@@ -299,7 +303,7 @@ else
   fi
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:find_binary\",\"message\":\"Binary search result\",\"data\":{\"ollama_bin\":\"$OLLAMA_BIN\",\"exists\":$(test -f "${OLLAMA_BIN:-}" && echo true || echo false),\"is_executable\":$(test -x "${OLLAMA_BIN:-}" && echo true || echo false),\"permissions\":\"$(ls -l "${OLLAMA_BIN:-}" 2>/dev/null | awk '{print $1}' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B,OLLAMA-D\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:find_binary\",\"message\":\"Binary search result\",\"data\":{\"ollama_bin\":\"$OLLAMA_BIN\",\"exists\":$(test -f "${OLLAMA_BIN:-}" && echo true || echo false),\"is_executable\":$(test -x "${OLLAMA_BIN:-}" && echo true || echo false),\"permissions\":\"$(ls -l "${OLLAMA_BIN:-}" 2>/dev/null | awk '{print $1}' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B,OLLAMA-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   if [[ -n "$OLLAMA_BIN" ]] && [[ -f "$OLLAMA_BIN" ]]; then
@@ -309,7 +313,7 @@ else
     log "Updated PATH to include: $(dirname "$OLLAMA_BIN")"
     
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama4\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:path_set\",\"message\":\"PATH updated\",\"data\":{\"new_path\":\"$PATH\",\"ollama_bin_dir\":\"$(dirname "$OLLAMA_BIN")\",\"command_exists\":$(command -v ollama >/dev/null 2>&1 && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+    echo "{\"id\":\"log_$(date +%s)_ollama4\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:path_set\",\"message\":\"PATH updated\",\"data\":{\"new_path\":\"$PATH\",\"ollama_bin_dir\":\"$(dirname "$OLLAMA_BIN")\",\"command_exists\":$(command -v ollama >/dev/null 2>&1 && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C\"}" >> "$DEBUG_LOG" 2>/dev/null || true
     # #endregion
   else
     log "ERROR: Could not find ollama binary in extracted tarball"
@@ -379,7 +383,7 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
   log "Using ollama command: $OLLAMA_CMD"
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama5\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:before_nohup\",\"message\":\"Before starting server\",\"data\":{\"ollama_cmd\":\"$OLLAMA_CMD\",\"cmd_exists\":$(test -f "$OLLAMA_CMD" && echo true || echo false),\"is_executable\":$(test -x "$OLLAMA_CMD" && echo true || echo false),\"path\":\"$PATH\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_ollama5\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:before_nohup\",\"message\":\"Before starting server\",\"data\":{\"ollama_cmd\":\"$OLLAMA_CMD\",\"cmd_exists\":$(test -f "$OLLAMA_CMD" && echo true || echo false),\"is_executable\":$(test -x "$OLLAMA_CMD" && echo true || echo false),\"path\":\"$PATH\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   nohup "$OLLAMA_CMD" serve >"$BUNDLE_DIR/logs/ollama_serve.log" 2>&1 &
@@ -387,7 +391,7 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
   NOHUP_EXIT=$?
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama6\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:after_nohup\",\"message\":\"After starting server\",\"data\":{\"serve_pid\":$SERVE_PID,\"nohup_exit\":$NOHUP_EXIT,\"process_exists\":$(kill -0 "$SERVE_PID" 2>/dev/null && echo true || echo false),\"log_content\":\"$(head -20 "$BUNDLE_DIR/logs/ollama_serve.log" 2>/dev/null | tr '\n' ';' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> /Users/richtobey/airgapped_llm/.cursor/debug.log
+  echo "{\"id\":\"log_$(date +%s)_ollama6\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:after_nohup\",\"message\":\"After starting server\",\"data\":{\"serve_pid\":$SERVE_PID,\"nohup_exit\":$NOHUP_EXIT,\"process_exists\":$(kill -0 "$SERVE_PID" 2>/dev/null && echo true || echo false),\"log_content\":\"$(head -20 "$BUNDLE_DIR/logs/ollama_serve.log" 2>/dev/null | tr '\n' ';' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   log "Ollama server started with PID: $SERVE_PID"
@@ -629,13 +633,14 @@ fi
 
 if [[ "$CONTINUE_DL_STATUS" -ne 0 ]]; then
   log "Fetching Continue VSIX + sha256 from Open VSX..."
-  python3 - <<'PY' "$BUNDLE_DIR"
-import json, sys, urllib.request
+  DEBUG_LOG="$DEBUG_LOG" python3 - <<'PY' "$BUNDLE_DIR"
+import json, sys, urllib.request, os
 from pathlib import Path
 
 bundle = Path(sys.argv[1])
 outdir = bundle/"continue"
 outdir.mkdir(parents=True, exist_ok=True)
+debug_log = os.environ.get("DEBUG_LOG", str(bundle/"logs"/"debug.log"))
 
 # Use Open VSX API to get extension metadata
 api_url = "https://open-vsx.org/api/Continue/continue"
@@ -677,7 +682,7 @@ try:
     sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
     # #region agent log
-    import json, time
+    import time
     log_entry = {
         "id": f"log_{int(time.time())}_vsix_dl1",
         "timestamp": int(time.time() * 1000),
@@ -695,8 +700,12 @@ try:
         "runId": "run1",
         "hypothesisId": "VSIX-A,VSIX-C"
     }
-    with open("/Users/richtobey/airgapped_llm/.cursor/debug.log", "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    try:
+        os.makedirs(os.path.dirname(debug_log), exist_ok=True)
+        with open(debug_log, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception:
+        pass
     # #endregion
     
     print("Version:", version)
@@ -809,7 +818,7 @@ try:
     sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
     # #region agent log
-    import json, time
+    import time
     log_entry = {
         "id": f"log_{int(time.time())}_vsix_dl1",
         "timestamp": int(time.time() * 1000),
@@ -827,8 +836,12 @@ try:
         "runId": "run1",
         "hypothesisId": "VSIX-A,VSIX-C"
     }
-    with open("/Users/richtobey/airgapped_llm/.cursor/debug.log", "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    try:
+        os.makedirs(os.path.dirname(debug_log), exist_ok=True)
+        with open(debug_log, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception:
+        pass
     # #endregion
     
     print("Version:", version)
@@ -942,7 +955,7 @@ try:
     sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
     # #region agent log
-    import json, time
+    import time
     log_entry = {
         "id": f"log_{int(time.time())}_vsix_dl1",
         "timestamp": int(time.time() * 1000),
@@ -960,8 +973,12 @@ try:
         "runId": "run1",
         "hypothesisId": "VSIX-A,VSIX-C"
     }
-    with open("/Users/richtobey/airgapped_llm/.cursor/debug.log", "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    try:
+        os.makedirs(os.path.dirname(debug_log), exist_ok=True)
+        with open(debug_log, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception:
+        pass
     # #endregion
     
     print("Version:", version)
