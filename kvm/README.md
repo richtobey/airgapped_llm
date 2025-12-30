@@ -52,10 +52,12 @@ See `../backup/README.md` for detailed backup instructions.
 Transfer the backup to your System76 machine:
 
 **Option A: External Drive**
+
 - Copy backup directory to external drive
 - Connect to System76 and copy to local storage
 
 **Option B: Network Transfer**
+
 ```bash
 # On Mac
 scp -r /path/to/backup user@system76:/path/to/destination
@@ -175,6 +177,7 @@ Use the provided script:
 ```
 
 This script will:
+
 - Create VM with appropriate CPU/memory settings
 - Configure network (NAT or bridge)
 - Set up display (SPICE or VNC)
@@ -272,6 +275,7 @@ systemctl status
 **Problem**: `virsh start` fails
 
 **Solutions**:
+
 - Check KVM support: `ls -l /dev/kvm`
 - Check user permissions: `groups` (should include libvirt, kvm)
 - Check libvirt service: `sudo systemctl status libvirtd`
@@ -293,6 +297,7 @@ systemctl status
 **Problem**: VM has no network access
 
 **Solutions**:
+
 - Check network config: `virsh domiflist popos-vm`
 - Restart network in VM: `sudo systemctl restart NetworkManager`
 - Check libvirt network: `virsh net-list --all`
@@ -303,6 +308,7 @@ systemctl status
 **Problem**: VM is slow
 
 **Solutions**:
+
 - Ensure KVM acceleration: `grep -E '(vmx|svm)' /proc/cpuinfo`
 - Increase VM memory/CPUs if host has resources
 - Use virtio drivers (should be automatic)
@@ -314,6 +320,7 @@ systemctl status
 **Problem**: Not enough space for VM
 
 **Solutions**:
+
 - Move VM disk: `virsh domblklist popos-vm`
 - Use external storage
 - Compress disk: `qemu-img convert -O qcow2 -c ...`
@@ -324,6 +331,7 @@ systemctl status
 **Problem**: VM won't boot or kernel panic
 
 **Solutions**:
+
 - Check boot order: `virsh dumpxml popos-vm | grep boot`
 - Try different boot options
 - Check disk integrity: `qemu-img check popos-vm.qcow2`

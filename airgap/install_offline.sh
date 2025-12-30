@@ -129,7 +129,7 @@ EOF
     libopenblas-dev \
     libatlas-base-dev \
     libgfortran5 \
-    libgfortran-dev \
+    gfortran \
     libssl-dev \
     libcrypto++-dev \
     libpng-dev \
