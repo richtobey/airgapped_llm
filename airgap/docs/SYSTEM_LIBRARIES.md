@@ -24,7 +24,7 @@ This document explains all system libraries included in the APT repository and w
 | `libopenblas-dev` | Optimized BLAS implementation (OpenBLAS) - faster than standard BLAS |
 | `libatlas-base-dev` | Automatically Tuned Linear Algebra Software - optimized BLAS/LAPACK |
 | `libgfortran5` | GNU Fortran runtime library - required by many scientific packages |
-| `libgfortran-dev` | GNU Fortran development files - for compiling Fortran code |
+| `gfortran` | GNU Fortran compiler - includes development files for compiling Fortran code (replaces libgfortran-dev on newer distributions) |
 
 **Why multiple BLAS implementations?** Different packages may prefer different implementations. Having multiple ensures compatibility.
 

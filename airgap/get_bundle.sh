@@ -533,11 +533,19 @@ except (KeyError, ValueError) as e:
 PY
   CONTINUE_DL_STATUS=$?
   if [[ "$CONTINUE_DL_STATUS" -eq 0 ]]; then
-    if sha256_check_vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256; then
-      log "Continue VSIX verified."
-      mark_success "continue"
+    # Find the actual VSIX file (wildcard expansion)
+    CONTINUE_VSIX_FILE="$(find "$BUNDLE_DIR/continue" -maxdepth 1 -name "Continue.continue-*.vsix" 2>/dev/null | head -n1)"
+    CONTINUE_SHA_FILE="${CONTINUE_VSIX_FILE}.sha256"
+    if [[ -n "$CONTINUE_VSIX_FILE" ]] && [[ -f "$CONTINUE_SHA_FILE" ]]; then
+      if sha256_check_vsix "$CONTINUE_VSIX_FILE" "$CONTINUE_SHA_FILE"; then
+        log "Continue VSIX verified."
+        mark_success "continue"
+      else
+        log "ERROR: Continue VSIX SHA256 verification failed"
+        mark_failed "continue"
+      fi
     else
-      log "ERROR: Continue VSIX SHA256 verification failed"
+      log "ERROR: Continue VSIX or SHA256 file not found"
       mark_failed "continue"
     fi
   else
@@ -627,11 +635,19 @@ PY
   PYTHON_EXT_DL_STATUS=$?
 
   if [[ $PYTHON_EXT_DL_STATUS -eq 0 ]]; then
-    if sha256_check_vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256; then
-      log "Python extension VSIX verified."
-      mark_success "python_ext"
+    # Find the actual VSIX file (wildcard expansion)
+    PYTHON_VSIX_FILE="$(find "$BUNDLE_DIR/extensions" -maxdepth 1 -name "ms-python.python-*.vsix" 2>/dev/null | head -n1)"
+    PYTHON_SHA_FILE="${PYTHON_VSIX_FILE}.sha256"
+    if [[ -n "$PYTHON_VSIX_FILE" ]] && [[ -f "$PYTHON_SHA_FILE" ]]; then
+      if sha256_check_vsix "$PYTHON_VSIX_FILE" "$PYTHON_SHA_FILE"; then
+        log "Python extension VSIX verified."
+        mark_success "python_ext"
+      else
+        log "ERROR: Python extension VSIX SHA256 verification failed"
+        mark_failed "python_ext"
+      fi
     else
-      log "ERROR: Python extension VSIX SHA256 verification failed"
+      log "ERROR: Python extension VSIX or SHA256 file not found"
       mark_failed "python_ext"
     fi
   else
@@ -721,11 +737,19 @@ PY
   RUST_EXT_DL_STATUS=$?
 
   if [[ $RUST_EXT_DL_STATUS -eq 0 ]]; then
-    if sha256_check_vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256; then
-      log "Rust Analyzer extension VSIX verified."
-      mark_success "rust_ext"
+    # Find the actual VSIX file (wildcard expansion)
+    RUST_VSIX_FILE="$(find "$BUNDLE_DIR/extensions" -maxdepth 1 -name "rust-lang.rust-analyzer-*.vsix" 2>/dev/null | head -n1)"
+    RUST_SHA_FILE="${RUST_VSIX_FILE}.sha256"
+    if [[ -n "$RUST_VSIX_FILE" ]] && [[ -f "$RUST_SHA_FILE" ]]; then
+      if sha256_check_vsix "$RUST_VSIX_FILE" "$RUST_SHA_FILE"; then
+        log "Rust Analyzer extension VSIX verified."
+        mark_success "rust_ext"
+      else
+        log "ERROR: Rust Analyzer extension VSIX SHA256 verification failed"
+        mark_failed "rust_ext"
+      fi
     else
-      log "ERROR: Rust Analyzer extension VSIX SHA256 verification failed"
+      log "ERROR: Rust Analyzer extension VSIX or SHA256 file not found"
       mark_failed "rust_ext"
     fi
   else
@@ -769,7 +793,7 @@ log "Building local APT repo with development tools and dependencies..."
     libopenblas-dev
     libatlas-base-dev
     libgfortran5
-    libgfortran-dev
+    gfortran
     # SSL/TLS (requests, httpx, cryptography)
     libssl-dev
     libcrypto++-dev
@@ -833,7 +857,31 @@ log "Building local APT repo with development tools and dependencies..."
   sudo apt-get update -y
 
   # Download (no install) into a temp cache, then copy .debs into the repo pool
-  sudo apt-get -y --download-only -o Dir::Cache="$TMP_APT" install "${APT_PACKAGES[@]}"
+  # Some packages may not be available on all distributions, so try individually if bulk fails
+  if ! sudo apt-get -y --download-only -o Dir::Cache="$TMP_APT" install "${APT_PACKAGES[@]}" 2>&1; then
+    log "WARNING: Bulk package download failed. Attempting to download packages individually..."
+    # Try to download packages individually to get as many as possible
+    MISSING_PKGS=()
+    for pkg in "${APT_PACKAGES[@]}"; do
+      OUTPUT=$(sudo apt-get -y --download-only -o Dir::Cache="$TMP_APT" install "$pkg" 2>&1)
+      EXIT_CODE=$?
+      if [[ $EXIT_CODE -ne 0 ]] && echo "$OUTPUT" | grep -q "Unable to locate package"; then
+        log "WARNING: Package not available: $pkg (skipping)"
+        MISSING_PKGS+=("$pkg")
+      elif [[ $EXIT_CODE -eq 0 ]]; then
+        log "Downloaded: $pkg"
+      else
+        log "WARNING: Failed to download $pkg (error code: $EXIT_CODE)"
+        MISSING_PKGS+=("$pkg")
+      fi
+    done
+    if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
+      log "WARNING: ${#MISSING_PKGS[@]} package(s) were not available: ${MISSING_PKGS[*]}"
+      log "Continuing with available packages..."
+    fi
+  else
+    log "All packages downloaded successfully."
+  fi
 
   mkdir -p "$BUNDLE_DIR/aptrepo/pool"
   find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" -print -exec cp -n {} "$BUNDLE_DIR/aptrepo/pool/" \;
