@@ -665,8 +665,19 @@ try:
     vsix_size = (outdir/vsix_name).stat().st_size
     
     # Open VSX returns just the hash, format it as "hash  filename"
+    # Handle rate limiting - if we get HTML, calculate hash from downloaded file instead
     sha256_response = urllib.request.urlopen(sha256_url).read().decode("utf-8")
     sha256_hash = sha256_response.strip()
+    
+    # Check if we got HTML instead of a hash (Open VSX rate limiting)
+    if sha256_hash.startswith("<!DOCTYPE") or sha256_hash.startswith("<html") or len(sha256_hash) > 100:
+        # Open VSX is throttling us - calculate hash from downloaded file instead
+        import hashlib
+        print(f"WARNING: Open VSX returned HTML (rate limiting). Calculating hash from downloaded file...")
+        with open(outdir/vsix_name, "rb") as f:
+            sha256_hash = hashlib.sha256(f.read()).hexdigest()
+        print(f"Calculated SHA256 from file: {sha256_hash[:16]}...")
+    
     sha256_file = outdir/(vsix_name + ".sha256")
     sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
@@ -801,8 +812,19 @@ try:
     vsix_size = (outdir/vsix_name).stat().st_size
     
     # Open VSX returns just the hash, format it as "hash  filename"
+    # Handle rate limiting - if we get HTML, calculate hash from downloaded file instead
     sha256_response = urllib.request.urlopen(sha256_url).read().decode("utf-8")
     sha256_hash = sha256_response.strip()
+    
+    # Check if we got HTML instead of a hash (Open VSX rate limiting)
+    if sha256_hash.startswith("<!DOCTYPE") or sha256_hash.startswith("<html") or len(sha256_hash) > 100:
+        # Open VSX is throttling us - calculate hash from downloaded file instead
+        import hashlib
+        print(f"WARNING: Open VSX returned HTML (rate limiting). Calculating hash from downloaded file...")
+        with open(outdir/vsix_name, "rb") as f:
+            sha256_hash = hashlib.sha256(f.read()).hexdigest()
+        print(f"Calculated SHA256 from file: {sha256_hash[:16]}...")
+    
     sha256_file = outdir/(vsix_name + ".sha256")
     sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
@@ -938,8 +960,19 @@ try:
     vsix_size = (outdir/vsix_name).stat().st_size
     
     # Open VSX returns just the hash, format it as "hash  filename"
+    # Handle rate limiting - if we get HTML, calculate hash from downloaded file instead
     sha256_response = urllib.request.urlopen(sha256_url).read().decode("utf-8")
     sha256_hash = sha256_response.strip()
+    
+    # Check if we got HTML instead of a hash (Open VSX rate limiting)
+    if sha256_hash.startswith("<!DOCTYPE") or sha256_hash.startswith("<html") or len(sha256_hash) > 100:
+        # Open VSX is throttling us - calculate hash from downloaded file instead
+        import hashlib
+        print(f"WARNING: Open VSX returned HTML (rate limiting). Calculating hash from downloaded file...")
+        with open(outdir/vsix_name, "rb") as f:
+            sha256_hash = hashlib.sha256(f.read()).hexdigest()
+        print(f"Calculated SHA256 from file: {sha256_hash[:16]}...")
+    
     sha256_file = outdir/(vsix_name + ".sha256")
     sha256_file.write_text(f"{sha256_hash}  {vsix_name}\n", encoding="utf-8")
     
