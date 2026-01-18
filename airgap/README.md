@@ -29,6 +29,8 @@ Creates the airgap bundle containing:
 **Usage:**
 
 ```bash
+# to limit models downloaded
+export OLLAMA_MODELS="mistral:7b-instruct"
 cd airgap
 ./get_bundle.sh
 ```
@@ -44,6 +46,18 @@ cd airgap
 ### `install_offline.sh`
 
 Installs the airgap bundle on the target Pop!_OS system. **Only installs pre-built packages** - no compilation or building happens on the airgapped system.
+
+Installs the following components:
+
+- System libraries and development tools (from offline APT repo) - **pre-built .deb packages**
+- VSCodium (code editor) - **pre-built .deb package**
+- Ollama binary - **pre-built binary**
+- Ollama AI models - **copied from bundle to ~/.ollama**
+- Continue extension (AI coding assistant) - **pre-built VSIX**
+- Python and Rust extensions - **pre-built VSIX files**
+- Rust toolchain - **installed via bundled rustup-init**
+- Rust crates - **vendored dependencies for offline builds**
+- Python packages - **pre-built wheels, no compilation**
 
 **Usage:**
 
@@ -80,3 +94,27 @@ cd /path/to/airgap_bundle
 ## Documentation
 
 See the main [README.md](../README.md) for complete documentation.
+
+## Connection Notes
+
+On linux run:
+
+```bash
+sshfs \
+  richtobey@192.168.68.88:/Volumes/T7_mac/airgapped_llm \
+  /mnt/t7_mac \
+  -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
+
+
+# unmount
+fusermount -uz /mnt/t7_mac
+```
+
+### (Optional) Make it persistent with systemd (recommended)
+
+
+Check:
+
+```bash
+findmnt /mnt/t7_mac
+```

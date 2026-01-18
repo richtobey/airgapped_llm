@@ -1,0 +1,6 @@
+Host popos
+    HostName 192.168.68.149
+    User admin
+    IdentityFile /Volumes/T7_mac/airgapped_llm/airgap/..sh/id_rsa
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null

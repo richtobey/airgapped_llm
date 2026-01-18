@@ -1,0 +1,6 @@
+# SSH Keys
+.ssh/id_rsa
+.ssh/id_rsa.pub
+.ssh/copy_key.sh
+.ssh/config
+
