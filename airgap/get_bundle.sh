@@ -17,7 +17,11 @@ debug_log() {
   # #region agent log
   local timestamp=$(date +%s)
   local log_entry="{\"id\":\"log_${timestamp}_$$\",\"timestamp\":${timestamp}000,\"location\":\"$location\",\"message\":\"$message\",\"data\":$data,\"sessionId\":\"$session_id\",\"runId\":\"$run_id\",\"hypothesisId\":\"$hypothesis_id\"}"
-  echo "$log_entry" >> "${DEBUG_LOG:-/tmp/debug.log}" 2>/dev/null || true
+  # Use DEBUG_LOG if set, otherwise try to use BUNDLE_DIR if available, fallback to /tmp
+  local log_file="${DEBUG_LOG:-${BUNDLE_DIR:-/tmp}/logs/debug.log}"
+  # Ensure log directory exists
+  mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
+  echo "$log_entry" >> "$log_file" 2>/dev/null || true
   # #endregion
 }
 
@@ -194,7 +198,12 @@ elif [[ -z "${OLLAMA_MODELS:-}" ]]; then
 fi
 
 mkdir -p \
-  "$BUNDLE_DIR"/{ollama,models,vscodium,continue,extensions,aptrepo/{pool,conf},rust/{toolchain,crates},python,logs}
+  "$BUNDLE_DIR"/{ollama,models,vscodium,continue,extensions,aptrepo/{pool,conf,_tmp},rust/{toolchain,crates},python,logs}
+
+# Set OLLAMA_HOME to bundle directory so all Ollama data goes under airgap_bundle
+# This ensures models and temp files are stored in the bundle, not in ~/.ollama or current directory
+export OLLAMA_HOME="$BUNDLE_DIR/ollama/.ollama_home"
+mkdir -p "$OLLAMA_HOME"
 
 # #region agent log
 debug_log "get_bundle.sh:init_dirs" "Bundle directories created" "{\"bundle_dir\":\"$BUNDLE_DIR\",\"dirs_created\":true}" "INIT-D" "run1"
@@ -824,8 +833,9 @@ if [[ -d "$HOME/.ollama/models" ]] && [[ -n "$(ls -A "$HOME/.ollama/models" 2>/d
 fi
 
 # Start ollama server in the background on the online machine just for pulling
-# (it will create ~/.ollama)
+# OLLAMA_HOME is set to $BUNDLE_DIR/ollama/.ollama_home so all data goes under airgap_bundle
 log "Starting Ollama server to pull models..."
+log "Ollama data will be stored in: $OLLAMA_HOME"
 # Check if ollama is available
 if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]] && ! command -v ollama >/dev/null 2>&1; then
   log "ERROR: ollama command not found in PATH. Check extraction and PATH setup."
@@ -933,7 +943,11 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
     PULL_FAILED=false
     for model in "${MODEL_ARRAY[@]}"; do
       log "Pulling model: $model ..."
-      if ! "$OLLAMA_CMD" pull "$model" 2>&1 | tee -a "$BUNDLE_DIR/logs/model_pull.log"; then
+      # Unset OLLAMA_MODELS to prevent it from interfering with ollama pull command
+      # OLLAMA_MODELS is only used by our script, not by Ollama itself
+      # Change to BUNDLE_DIR to ensure all files go under airgap_bundle
+      # OLLAMA_HOME is already set to $BUNDLE_DIR/ollama/.ollama_home
+      if ! (cd "$BUNDLE_DIR" && unset OLLAMA_MODELS && "$OLLAMA_CMD" pull "$model" 2>&1 | tee -a "$BUNDLE_DIR/logs/model_pull.log"); then
         log "WARNING: Failed to pull $model. Continuing with other models..."
         PULL_FAILED=true
       else
@@ -970,26 +984,37 @@ fi
 mkdir -p "$BUNDLE_DIR/models"
 
 MODELS_COPIED=false
-if [[ ! -d "$HOME/.ollama" ]]; then
-  log "WARNING: ~/.ollama directory does not exist. Models were not pulled."
+# Check for models in OLLAMA_HOME (where we told Ollama to store them) first
+# Fall back to ~/.ollama for backward compatibility
+OLLAMA_SOURCE=""
+if [[ -d "$OLLAMA_HOME" ]] && [[ -n "$(ls -A "$OLLAMA_HOME" 2>/dev/null)" ]]; then
+  OLLAMA_SOURCE="$OLLAMA_HOME"
+  log "Found models in OLLAMA_HOME: $OLLAMA_HOME"
+elif [[ -d "$HOME/.ollama" ]] && [[ -n "$(ls -A "$HOME/.ollama" 2>/dev/null)" ]]; then
+  OLLAMA_SOURCE="$HOME/.ollama"
+  log "Found models in ~/.ollama (fallback)"
+fi
+
+if [[ -z "$OLLAMA_SOURCE" ]]; then
+  log "WARNING: No models found in $OLLAMA_HOME or ~/.ollama. Models were not pulled."
   if [[ "$PULL_FAILED" == "true" ]]; then
     log "WARNING: Model pulling failed. Check logs: $BUNDLE_DIR/logs/ollama_serve.log"
   fi
   mark_failed "models"
   # #region agent log
-  debug_log "get_bundle.sh:models:copy_failed" "Models directory not found" "{\"home_ollama\":\"$HOME/.ollama\",\"exists\":false}" "MODEL-C" "run1"
+  debug_log "get_bundle.sh:models:copy_failed" "Models directory not found" "{\"ollama_home\":\"$OLLAMA_HOME\",\"home_ollama\":\"$HOME/.ollama\",\"ollama_home_exists\":$(test -d "$OLLAMA_HOME" && echo true || echo false),\"home_ollama_exists\":$(test -d "$HOME/.ollama" && echo true || echo false)}" "MODEL-C" "run1"
   # #endregion
 else
   if [[ "$MOVE_MODELS" == "true" ]]; then
     # Move models to save disk space
     # #region agent log
-    debug_log "get_bundle.sh:models:move_attempt" "Attempting to move models" "{\"source\":\"$HOME/.ollama\",\"dest\":\"$BUNDLE_DIR/models/.ollama\"}" "MODEL-D" "run1"
+    debug_log "get_bundle.sh:models:move_attempt" "Attempting to move models" "{\"source\":\"$OLLAMA_SOURCE\",\"dest\":\"$BUNDLE_DIR/models/.ollama\"}" "MODEL-D" "run1"
     # #endregion
-    if mv "$HOME/.ollama" "$BUNDLE_DIR/models/.ollama"; then
+    if mv "$OLLAMA_SOURCE" "$BUNDLE_DIR/models/.ollama"; then
       TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
       log "Models moved successfully. Total size: $TOTAL_SIZE"
       log "Models bundled: ${OLLAMA_MODELS}"
-      log "Note: Original models in ~/.ollama have been moved to bundle"
+      log "Note: Original models have been moved to bundle"
       mark_success "models"
       MODELS_COPIED=true
       # #region agent log
@@ -1005,9 +1030,9 @@ else
   else
     # Use rsync to copy models
     # #region agent log
-    debug_log "get_bundle.sh:models:copy_attempt" "Attempting to copy models" "{\"source\":\"$HOME/.ollama/\",\"dest\":\"$BUNDLE_DIR/models/.ollama/\"}" "MODEL-F" "run1"
+    debug_log "get_bundle.sh:models:copy_attempt" "Attempting to copy models" "{\"source\":\"$OLLAMA_SOURCE/\",\"dest\":\"$BUNDLE_DIR/models/.ollama/\"}" "MODEL-F" "run1"
     # #endregion
-    if rsync -a --delete "$HOME/.ollama/" "$BUNDLE_DIR/models/.ollama/"; then
+    if rsync -a --delete "$OLLAMA_SOURCE/" "$BUNDLE_DIR/models/.ollama/"; then
       TOTAL_SIZE=$(du -sh "$BUNDLE_DIR/models/.ollama" 2>/dev/null | cut -f1 || echo "unknown")
       log "Models copied successfully. Total size: $TOTAL_SIZE"
       log "Models bundled: ${OLLAMA_MODELS}"
@@ -1043,6 +1068,24 @@ if [[ "$MODELS_COPIED" == "true" ]]; then
     fi
   fi
   
+  # Clean up OLLAMA_HOME temp directory (models are now in bundle/models/.ollama)
+  if [[ -n "${OLLAMA_HOME:-}" ]] && [[ -d "$OLLAMA_HOME" ]] && [[ "$OLLAMA_HOME" == "$BUNDLE_DIR"* ]]; then
+    OLLAMA_HOME_SIZE=$(du -sh "$OLLAMA_HOME" 2>/dev/null | cut -f1 || echo "unknown")
+    if rm -rf "$OLLAMA_HOME" 2>/dev/null; then
+      log "Cleaned up temporary Ollama home directory ($OLLAMA_HOME_SIZE)"
+    fi
+  fi
+  
+  # Clean up any incorrectly placed model directories in the script's working directory
+  # (These can be created if Ollama runs from the wrong directory before our fix)
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for model in "${MODEL_ARRAY[@]}"; do
+    # Check if model directory exists in script directory (not in bundle)
+    if [[ -d "$SCRIPT_DIR/$model" ]] && [[ "$SCRIPT_DIR/$model" != "$BUNDLE_DIR"* ]]; then
+      log "Cleaning up incorrectly placed model directory: $SCRIPT_DIR/$model"
+      rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || log "WARNING: Could not remove $SCRIPT_DIR/$model"
+    fi
+  done
   
   # Clean up ollama serve log if models were successfully copied
   if [[ -f "$BUNDLE_DIR/logs/ollama_serve.log" ]]; then
@@ -1050,6 +1093,14 @@ if [[ "$MODELS_COPIED" == "true" ]]; then
     tail -50 "$BUNDLE_DIR/logs/ollama_serve.log" > "$BUNDLE_DIR/logs/ollama_serve.log.summary" 2>/dev/null || true
     rm -f "$BUNDLE_DIR/logs/ollama_serve.log"
     log "Cleaned up Ollama server log (summary kept)"
+  fi
+fi
+
+# Clean up APT temp directory after repo is built
+if [[ -d "$BUNDLE_DIR/aptrepo/_tmp" ]]; then
+  APT_TMP_SIZE=$(du -sh "$BUNDLE_DIR/aptrepo/_tmp" 2>/dev/null | cut -f1 || echo "unknown")
+  if rm -rf "$BUNDLE_DIR/aptrepo/_tmp" 2>/dev/null; then
+    log "Cleaned up APT temp directory ($APT_TMP_SIZE)"
   fi
 fi
 
