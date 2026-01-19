@@ -1232,15 +1232,29 @@ if [[ -n "$CONTINUE_VSIX" ]]; then
   CONTINUE_SHA="${CONTINUE_VSIX}.sha256"
 fi
 
-if [[ -n "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_SHA" ]]; then
-  log "Continue VSIX already exists, verifying..."
-  if sha256_check_vsix "$CONTINUE_VSIX" "$CONTINUE_SHA"; then
-    log "Continue VSIX already downloaded and verified. Skipping download."
-    mark_success "continue"
-    CONTINUE_DL_STATUS=0
-  else
-    log "Existing Continue VSIX failed verification. Re-downloading..."
+# Check if file exists but is suspiciously small (incomplete download)
+# VSIX files are typically at least 1MB, so files under 100KB are likely incomplete
+if [[ -n "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_VSIX" ]]; then
+  FILE_SIZE=$(stat -c%s "$CONTINUE_VSIX" 2>/dev/null || stat -f%z "$CONTINUE_VSIX" 2>/dev/null || echo 0)
+  if [[ $FILE_SIZE -lt 100000 ]]; then
+    log "Existing Continue VSIX is suspiciously small (${FILE_SIZE} bytes). Re-downloading..."
     rm -f "$CONTINUE_VSIX" "$CONTINUE_SHA"
+    CONTINUE_DL_STATUS=1
+  elif [[ -f "$CONTINUE_SHA" ]]; then
+    log "Continue VSIX already exists, verifying..."
+    if sha256_check_vsix "$CONTINUE_VSIX" "$CONTINUE_SHA"; then
+      log "Continue VSIX already downloaded and verified. Skipping download."
+      mark_success "continue"
+      CONTINUE_DL_STATUS=0
+    else
+      log "Existing Continue VSIX failed verification. Re-downloading..."
+      rm -f "$CONTINUE_VSIX" "$CONTINUE_SHA"
+      CONTINUE_DL_STATUS=1
+    fi
+  else
+    # File exists but no SHA256 - need to download to get SHA256
+    log "Continue VSIX exists but no SHA256 file. Re-downloading to verify..."
+    rm -f "$CONTINUE_VSIX"
     CONTINUE_DL_STATUS=1
   fi
 else
@@ -1459,15 +1473,29 @@ if [[ -n "$PYTHON_VSIX" ]]; then
   PYTHON_SHA="${PYTHON_VSIX}.sha256"
 fi
 
-if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_SHA" ]]; then
-  log "Python extension VSIX already exists, verifying..."
-  if sha256_check_vsix "$PYTHON_VSIX" "$PYTHON_SHA"; then
-    log "Python extension VSIX already downloaded and verified. Skipping download."
-    mark_success "python_ext"
-    PYTHON_EXT_DL_STATUS=0
-  else
-    log "Existing Python extension VSIX failed verification. Re-downloading..."
+# Check if file exists but is suspiciously small (incomplete download)
+# VSIX files are typically at least 1MB, so files under 100KB are likely incomplete
+if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]]; then
+  FILE_SIZE=$(stat -c%s "$PYTHON_VSIX" 2>/dev/null || stat -f%z "$PYTHON_VSIX" 2>/dev/null || echo 0)
+  if [[ $FILE_SIZE -lt 100000 ]]; then
+    log "Existing Python extension VSIX is suspiciously small (${FILE_SIZE} bytes). Re-downloading..."
     rm -f "$PYTHON_VSIX" "$PYTHON_SHA"
+    PYTHON_EXT_DL_STATUS=1
+  elif [[ -f "$PYTHON_SHA" ]]; then
+    log "Python extension VSIX already exists, verifying..."
+    if sha256_check_vsix "$PYTHON_VSIX" "$PYTHON_SHA"; then
+      log "Python extension VSIX already downloaded and verified. Skipping download."
+      mark_success "python_ext"
+      PYTHON_EXT_DL_STATUS=0
+    else
+      log "Existing Python extension VSIX failed verification. Re-downloading..."
+      rm -f "$PYTHON_VSIX" "$PYTHON_SHA"
+      PYTHON_EXT_DL_STATUS=1
+    fi
+  else
+    # File exists but no SHA256 - need to download to get SHA256
+    log "Python extension VSIX exists but no SHA256 file. Re-downloading to verify..."
+    rm -f "$PYTHON_VSIX"
     PYTHON_EXT_DL_STATUS=1
   fi
 else
@@ -1683,15 +1711,29 @@ if [[ -n "$RUST_VSIX" ]]; then
   RUST_SHA="${RUST_VSIX}.sha256"
 fi
 
-if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]] && [[ -f "$RUST_SHA" ]]; then
-  log "Rust Analyzer extension VSIX already exists, verifying..."
-  if sha256_check_vsix "$RUST_VSIX" "$RUST_SHA"; then
-    log "Rust Analyzer extension VSIX already downloaded and verified. Skipping download."
-    mark_success "rust_ext"
-    RUST_EXT_DL_STATUS=0
-  else
-    log "Existing Rust Analyzer extension VSIX failed verification. Re-downloading..."
+# Check if file exists but is suspiciously small (incomplete download)
+# VSIX files are typically at least 1MB, so files under 100KB are likely incomplete
+if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]]; then
+  FILE_SIZE=$(stat -c%s "$RUST_VSIX" 2>/dev/null || stat -f%z "$RUST_VSIX" 2>/dev/null || echo 0)
+  if [[ $FILE_SIZE -lt 100000 ]]; then
+    log "Existing Rust Analyzer extension VSIX is suspiciously small (${FILE_SIZE} bytes). Re-downloading..."
     rm -f "$RUST_VSIX" "$RUST_SHA"
+    RUST_EXT_DL_STATUS=1
+  elif [[ -f "$RUST_SHA" ]]; then
+    log "Rust Analyzer extension VSIX already exists, verifying..."
+    if sha256_check_vsix "$RUST_VSIX" "$RUST_SHA"; then
+      log "Rust Analyzer extension VSIX already downloaded and verified. Skipping download."
+      mark_success "rust_ext"
+      RUST_EXT_DL_STATUS=0
+    else
+      log "Existing Rust Analyzer extension VSIX failed verification. Re-downloading..."
+      rm -f "$RUST_VSIX" "$RUST_SHA"
+      RUST_EXT_DL_STATUS=1
+    fi
+  else
+    # File exists but no SHA256 - need to download to get SHA256
+    log "Rust Analyzer extension VSIX exists but no SHA256 file. Re-downloading to verify..."
+    rm -f "$RUST_VSIX"
     RUST_EXT_DL_STATUS=1
   fi
 else
@@ -2551,33 +2593,60 @@ shutil.copy(requirements, outdir/"requirements.txt")
 try:
     # Step 1: Download binary wheels with ALL dependencies
     # pip download automatically includes dependencies unless --no-deps is specified
-    print("Step 1: Downloading binary wheels for Linux (with ALL dependencies)...")
+    # Download wheels for current platform (no platform restriction = current platform)
+    print("Step 1: Downloading binary wheels for current Linux platform (with ALL dependencies)...")
     result = subprocess.run([
         sys.executable, "-m", "pip", "download",
         "-r", str(requirements),
         "-d", str(outdir),
-        "--platform", "manylinux2014_x86_64",  # Compatible Linux platform
-        "--platform", "manylinux1_x86_64",      # Older compatibility
-        "--platform", "linux_x86_64",
-        "--only-binary", ":all:",
-        "--python-version", "3",  # Python 3.x
+        # No --platform flag = use current platform (most compatible)
+        # No --only-binary flag = prefer wheels but allow source if needed
         # IMPORTANT: No --no-deps flag, so ALL transitive dependencies are included
     ], capture_output=True, text=True)
     
     if result.returncode != 0:
-        print(f"Warning: Some packages may not have binary wheels: {result.stderr}")
+        print(f"Warning: Binary wheel download had issues:")
+        if result.stdout:
+            print(f"  stdout: {result.stdout[:500]}")
+        if result.stderr:
+            print(f"  stderr: {result.stderr[:500]}")
+    else:
+        wheels_downloaded = len(list(outdir.glob("*.whl")))
+        print(f"✓ Downloaded {wheels_downloaded} binary wheels")
     
-    # Step 2: Download source distributions as fallback for packages without wheels
-    # This ensures we have everything, even if it needs compilation
-    # Also downloads dependencies that might have been missed
-    print("Step 2: Downloading source distributions (with ALL dependencies)...")
-    subprocess.run([
-        sys.executable, "-m", "pip", "download",
-        "-r", str(requirements),
-        "-d", str(outdir),
-        "--no-binary", ":all:",  # Get source dists
-        # IMPORTANT: No --no-deps flag, so ALL dependencies are included
-    ], capture_output=True, text=True, check=False)
+    # Step 2: Download source distributions as fallback ONLY for packages without wheels
+    # Check which packages from requirements don't have wheels, and only download source for those
+    print("Step 2: Checking for packages without binary wheels...")
+    existing_wheels = {f.stem.split('-')[0].lower().replace('_', '-') for f in outdir.glob("*.whl")}
+    
+    # Read requirements to see what packages we need
+    required_packages = []
+    with open(requirements, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                # Extract package name (handle formats like "package>=1.0", "package[extra]", etc.)
+                pkg_name = line.split('[')[0].split('>=')[0].split('==')[0].split('!=')[0].split('<=')[0].split('<')[0].split('>')[0].strip()
+                if pkg_name:
+                    required_packages.append(pkg_name.lower().replace('_', '-'))
+    
+    # Find packages that don't have wheels
+    missing_wheels = [pkg for pkg in required_packages if pkg not in existing_wheels]
+    
+    if missing_wheels:
+        print(f"Step 2: Downloading source distributions for {len(missing_wheels)} packages without wheels...")
+        # Only download source for packages that don't have wheels
+        # Use --no-binary for specific packages, not :all:
+        for pkg in missing_wheels:
+            print(f"  Downloading source for {pkg}...")
+            subprocess.run([
+                sys.executable, "-m", "pip", "download",
+                pkg,
+                "-d", str(outdir),
+                "--no-binary", pkg,  # Only this package as source
+            ], capture_output=True, text=True, check=False)
+    else:
+        print("Step 2: All packages have binary wheels, skipping source downloads.")
     
     # Step 3: Verify we have all dependencies by attempting to resolve them
     print("Step 3: Verifying dependency completeness...")

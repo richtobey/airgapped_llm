@@ -84,16 +84,85 @@ cd /path/to/airgap_bundle
    - Run `install_offline.sh` to install pre-built packages
    - Installation is fast - no compilation needed
 
-4. **Start Using**: Launch Ollama and VSCodium
+4. **Start Using**: Launch Ollama and VSCodium (see [Running Ollama and VSCodium](docs/run_ollama.md))
 
 ## Requirements
 
 - **Bundle Creation**: **Pop!_OS/Ubuntu/Debian Linux (amd64) REQUIRED**, Python 3, Internet connection, Build tools (installed automatically)
 - **Installation**: Pop!_OS or Ubuntu/Debian-based Linux (amd64), sudo access
 
+## Backup and Restore of POP_OS
+
+This process will preserve and enable a reset of the machine if there is any suspiction if there is any concern about corruption.
+
+### Recommended: Clonezilla
+
+**Clonezilla** is a free, open-source disk imaging tool that is the simplest and most reliable solution for backing up and restoring your airgapped system.
+
+#### Quick Start
+
+**You need TWO drives:**
+1. **Clonezilla USB** (4-8 GB) - for booting Clonezilla
+2. **Backup drive** (larger, see below) - where backups are stored
+
+1. **Download Clonezilla Live** (on online machine):
+   ```bash
+   wget -O clonezilla-live-amd64.iso \
+https://sourceforge.net/projects/clonezilla/files/clonezilla_live_stable/3.3.0-33/clonezilla-live-3.3.0-33-amd64.iso/download
+   ```
+
+2. **Create Bootable Clonezilla USB** (small USB, 4-8 GB):
+   ```bash
+   sudo ./create_clonezilla_usb.sh clonezilla-live-3.3.0-33-amd64.iso /dev/sdb
+   ```
+   (Replace `/dev/sdb` with your USB device - find it with `lsblk`)
+
+3. **Prepare Backup Drive** (separate, larger drive):
+   - Connect external USB/HDD for backups
+   - Size: At least 30-50% of your used disk space (for compressed backups)
+   - Example: 200GB used = 60-100GB backup, so get 200GB+ drive
+   - **Format:** ext4 (recommended) or exFAT (if cross-platform needed)
+
+4. **Boot from Clonezilla USB**:
+   - **Ensure Clonezilla USB is plugged in**
+   - Power on or restart your computer
+   - **Immediately press F11** (or your system's boot menu key) repeatedly during startup
+   - In the boot menu, look for **"Boot Override"** or boot device selection
+   - Select the Clonezilla USB device (may appear as "UEFI: USB" or similar)
+   - If USB doesn't appear, ensure Secure Boot is disabled in BIOS/UEFI settings
+
+5. **Create Backup**:
+   - Once Clonezilla boots, select: `device-image` → `savedisk`
+   - Enter backup name (e.g., `virgin_state_20240101`)
+   - Select source disk (your system disk)
+   - **Select backup location** (your backup drive, NOT the Clonezilla USB)
+   - Start backup
+
+6. **Restore from Backup**:
+   - Boot from Clonezilla USB (using F11 boot override method above)
+   - Select: `device-image` → `restoredisk`
+   - Select backup image from your backup drive
+   - Select target disk
+   - Start restore
+
+#### Prepare for Backup
+
+Before creating a backup, gather system information:
+
+```bash
+./prepare_backup.sh virgin_state_20240101
+```
+
+**See [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) for complete Clonezilla documentation.**
+
 ## Documentation
 
 See the main [README.md](../README.md) for complete documentation.
+
+- [Backup and Restore Guide](docs/BACKUP_RESTORE.md)
+- [System Libraries](docs/SYSTEM_LIBRARIES.md)
+- [Package Review](docs/AIRGAP_REVIEW.md)
+- [Running Ollama and VSCodium](docs/run_ollama.md)
 
 ## Connection Notes
 

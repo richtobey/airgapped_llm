@@ -4,3 +4,12 @@
 .ssh/copy_key.sh
 .ssh/config
 
+# Debug logs
+.cursor/debug.log
+
+# macOS system files
+.DS_Store
+mistral:7b-instruct/
+mixtral:8x7b/
+clonezilla-live-amd64.iso
+

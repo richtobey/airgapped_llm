@@ -64,24 +64,18 @@
 
 ## ⚠️ Potential Issues & Solutions
 
-### Issue 1: APT Repo Not Built on macOS
-**Status:** ✅ Handled
-- Script detects macOS and skips APT repo build
-- Provides clear instructions for building on Linux
-- Install script checks for repo and provides fallback
-
-### Issue 2: Python Package Compilation
+### Issue 1: Python Package Compilation
 **Status:** ✅ Handled
 - Build tools included in APT repo
 - System libraries included
 - Source distributions bundled as fallback
 
-### Issue 3: Rust Crates Not Bundled
+### Issue 2: Rust Crates Not Bundled
 **Status:** ⚠️ Requires Cargo.toml
 - Only bundles if Cargo.toml is present
 - Provides manual instructions if not
 
-### Issue 4: Large Bundle Size
+### Issue 3: Large Bundle Size
 **Status:** ⚠️ Expected
 - Mixtral 8x7B model is ~26GB
 - Python packages can be large
