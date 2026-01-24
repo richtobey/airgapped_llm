@@ -402,7 +402,7 @@ create_bootable_usb() {
     log_info "4. In boot menu, look for 'Boot Override' or boot device selection"
     log_info "5. Select the Clonezilla USB (may show as 'UEFI: USB' or similar)"
     log_info "6. Follow Clonezilla prompts to create/restore backups"
-    log_info ""
+    log_info "" 
     log_warn "If USB is NOT recognized in boot menu (F11), try:"
     log_info ""
     log_info "Boot Method:"

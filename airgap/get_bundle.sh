@@ -109,6 +109,36 @@ get_status() {
 }
 
 # ============
+# Command-line argument parsing
+# ============
+SKIP_VERIFICATION="${SKIP_VERIFICATION:-false}"
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --skip-verification)
+      SKIP_VERIFICATION="true"
+      shift
+      ;;
+    --help|-h)
+      echo "Usage: $0 [--skip-verification]"
+      echo ""
+      echo "Options:"
+      echo "  --skip-verification    Skip SHA256 verification of downloads. If files exist,"
+      echo "                        accept them without verification."
+      echo "  --help, -h             Show this help message"
+      echo ""
+      echo "Environment Variables:"
+      echo "  SKIP_VERIFICATION     Set to 'true' to skip verification (same as --skip-verification flag)"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Use --help for usage information" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# ============
 # Config
 # ============
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
@@ -119,6 +149,10 @@ DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/debug.log}"
 CONSOLE_LOG="${CONSOLE_LOG:-$BUNDLE_DIR/logs/console.log}"
 # Ensure log directories exist
 mkdir -p "$(dirname "$DEBUG_LOG")" "$(dirname "$CONSOLE_LOG")" 2>/dev/null || true
+
+# Store script start directory for cleanup operations
+# We'll change to BUNDLE_DIR when running commands that might create files
+SCRIPT_START_DIR="$PWD"
 
 # #region agent log
 debug_log "get_bundle.sh:config" "Configuration initialized" "{\"bundle_dir\":\"$BUNDLE_DIR\",\"arch\":\"$ARCH\",\"debug_log\":\"$DEBUG_LOG\",\"console_log\":\"$CONSOLE_LOG\"}" "INIT-C" "run1"
@@ -214,8 +248,32 @@ sha256_check_file() {
   local sha_file="$2"
   
   # #region agent log
-  debug_log "get_bundle.sh:sha256_check_file:entry" "SHA256 check started" "{\"file\":\"$file\",\"sha_file\":\"$sha_file\"}" "SHA-A" "run1"
+  debug_log "get_bundle.sh:sha256_check_file:entry" "SHA256 check started" "{\"file\":\"$file\",\"sha_file\":\"$sha_file\",\"skip_verification\":\"$SKIP_VERIFICATION\"}" "SHA-A" "run1"
   # #endregion
+  
+  # Check if file was verified in a previous run
+  local verified_marker="${file}.verified"
+  if [[ -f "$verified_marker" ]]; then
+    log "File $(basename "$file") was verified in a previous run. Skipping verification."
+    # #region agent log
+    debug_log "get_bundle.sh:sha256_check_file:previously_verified" "File was verified previously" "{\"file\":\"$file\",\"verified_marker\":\"$verified_marker\",\"verified_date\":\"$(cat "$verified_marker" 2>/dev/null || echo 'unknown')\"}" "SHA-A" "run1"
+    # #endregion
+    return 0
+  fi
+  
+  # Skip verification if flag is set
+  if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    if [[ -f "$file" ]]; then
+      log "Skipping verification (--skip-verification flag set). Accepting existing file: $(basename "$file")"
+      # #region agent log
+      debug_log "get_bundle.sh:sha256_check_file:skipped" "SHA256 check skipped" "{\"file\":\"$file\",\"reason\":\"skip_verification_flag\"}" "SHA-A" "run1"
+      # #endregion
+      return 0
+    else
+      log "ERROR: File not found: $file"
+      return 1
+    fi
+  fi
   
   if command -v sha256sum >/dev/null 2>&1; then
     local result
@@ -225,6 +283,12 @@ sha256_check_file() {
     # #region agent log
     debug_log "get_bundle.sh:sha256_check_file:result" "SHA256 check completed" "{\"file\":\"$file\",\"exit_code\":$exit_code,\"result\":\"${result:0:200}\"}" "SHA-A" "run1"
     # #endregion
+    
+    # If verification succeeded, create a marker file to indicate this file was verified
+    if [[ $exit_code -eq 0 ]]; then
+      local verified_marker="${file}.verified"
+      echo "$(date -Is)" > "$verified_marker" 2>/dev/null || true
+    fi
     
     return $exit_code
   else
@@ -242,8 +306,32 @@ sha256_check_vsix() {
   local sha_file="$2"
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_vsix1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:entry\",\"message\":\"VSIX verification started\",\"data\":{\"file\":\"$file\",\"sha_file\":\"$sha_file\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+  echo "{\"id\":\"log_$(date +%s)_vsix1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:entry\",\"message\":\"VSIX verification started\",\"data\":{\"file\":\"$file\",\"sha_file\":\"$sha_file\",\"skip_verification\":\"$SKIP_VERIFICATION\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
+  
+  # Check if file was verified in a previous run
+  local verified_marker="${file}.verified"
+  if [[ -f "$verified_marker" ]]; then
+    log "File $(basename "$file") was verified in a previous run. Skipping verification."
+    # #region agent log
+    echo "{\"id\":\"log_$(date +%s)_vsix_prev\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:previously_verified\",\"message\":\"VSIX was verified previously\",\"data\":{\"file\":\"$file\",\"verified_marker\":\"$verified_marker\",\"verified_date\":\"$(cat "$verified_marker" 2>/dev/null || echo 'unknown')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+    # #endregion
+    return 0
+  fi
+  
+  # Skip verification if flag is set
+  if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    if [[ -f "$file" ]]; then
+      log "Skipping verification (--skip-verification flag set). Accepting existing file: $(basename "$file")"
+      # #region agent log
+      echo "{\"id\":\"log_$(date +%s)_vsix_skip\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:sha256_check_vsix:skipped\",\"message\":\"VSIX verification skipped\",\"data\":{\"file\":\"$file\",\"reason\":\"skip_verification_flag\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"VSIX-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+      # #endregion
+      return 0
+    else
+      log "ERROR: VSIX file not found: $file"
+      return 1
+    fi
+  fi
   
   if [[ ! -f "$file" ]]; then
     log "ERROR: VSIX file not found: $file"
@@ -303,6 +391,9 @@ sha256_check_vsix() {
   # #endregion
   
   if [[ "$expected_lower" == "$actual_lower" ]]; then
+    # If verification succeeded, create a marker file to indicate this file was verified
+    local verified_marker="${file}.verified"
+    echo "$(date -Is)" > "$verified_marker" 2>/dev/null || true
     return 0
   else
     log "DEBUG: Hash mismatch for $(basename "$file")"
@@ -334,22 +425,39 @@ debug_log "get_bundle.sh:ollama:check_existing" "Checking for existing Ollama bi
 # #endregion
 
 # Check if file already exists and is valid
-if [[ -n "$OLLAMA_EXISTING" ]] && [[ -f "$OLLAMA_SHA" ]]; then
-  log "Ollama Linux binary already exists, verifying..."
-  if sha256_check_file "$OLLAMA_EXISTING" "$OLLAMA_SHA"; then
-    log "Ollama already downloaded and verified. Skipping download."
+if [[ -n "$OLLAMA_EXISTING" ]]; then
+  if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    log "Ollama Linux binary already exists. Skipping verification (--skip-verification flag set)."
     mark_success "ollama_linux"
     OLLAMA_DL_STATUS=0
     # #region agent log
-    debug_log "get_bundle.sh:ollama:existing_valid" "Existing Ollama binary verified" "{\"status\":\"success\",\"file\":\"$OLLAMA_EXISTING\"}" "OLLAMA-A" "run1"
+    debug_log "get_bundle.sh:ollama:existing_skipped" "Existing Ollama binary accepted without verification" "{\"status\":\"success\",\"file\":\"$OLLAMA_EXISTING\",\"skip_verification\":true}" "OLLAMA-A" "run1"
     # #endregion
+  elif [[ -f "$OLLAMA_SHA" ]]; then
+    log "Ollama Linux binary already exists, verifying..."
+    if sha256_check_file "$OLLAMA_EXISTING" "$OLLAMA_SHA"; then
+      log "Ollama already downloaded and verified. Skipping download."
+      mark_success "ollama_linux"
+      OLLAMA_DL_STATUS=0
+      # #region agent log
+      debug_log "get_bundle.sh:ollama:existing_valid" "Existing Ollama binary verified" "{\"status\":\"success\",\"file\":\"$OLLAMA_EXISTING\"}" "OLLAMA-A" "run1"
+      # #endregion
+    else
+      log "Existing Ollama file failed verification. Re-downloading..."
+      # #region agent log
+      debug_log "get_bundle.sh:ollama:existing_invalid" "Existing Ollama binary failed verification" "{\"status\":\"failed_verification\",\"file\":\"$OLLAMA_EXISTING\"}" "OLLAMA-B" "run1"
+      # #endregion
+      rm -f "$OLLAMA_EXISTING" "$OLLAMA_SHA" "$OLLAMA_TGZ" "$OLLAMA_ARCHIVE" "${OLLAMA_EXISTING}.verified"
+      OLLAMA_DL_STATUS=1
+    fi
   else
-    log "Existing Ollama file failed verification. Re-downloading..."
-    # #region agent log
-    debug_log "get_bundle.sh:ollama:existing_invalid" "Existing Ollama binary failed verification" "{\"status\":\"failed_verification\",\"file\":\"$OLLAMA_EXISTING\"}" "OLLAMA-B" "run1"
-    # #endregion
-    rm -f "$OLLAMA_EXISTING" "$OLLAMA_SHA" "$OLLAMA_TGZ" "$OLLAMA_ARCHIVE"
-    OLLAMA_DL_STATUS=1
+    # File exists but no SHA - if skip flag is not set, we need to download to verify
+    if [[ "$SKIP_VERIFICATION" != "true" ]]; then
+      OLLAMA_DL_STATUS=1
+      # #region agent log
+      debug_log "get_bundle.sh:ollama:no_sha" "Ollama binary exists but no SHA file, will download to verify" "{\"status\":\"no_sha\"}" "OLLAMA-A" "run1"
+      # #endregion
+    fi
   fi
 else
   OLLAMA_DL_STATUS=1
@@ -639,6 +747,50 @@ fi
 # ============
 # 2) Pull Ollama models, then copy ~/.ollama
 # ============
+# First, check for model directories in the script directory and copy them directly to final bundle location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Models go directly to final destination in bundle (not through OLLAMA_HOME temp location)
+FINAL_MODEL_DIR="$BUNDLE_DIR/models/.ollama/models"
+mkdir -p "$FINAL_MODEL_DIR"
+
+# Look for model directories in the script directory (e.g., mistral:7b, mixtral:8x7b, etc.)
+# These are Ollama model directories that should be copied directly to final bundle location
+log "Checking for model directories in script directory: $SCRIPT_DIR"
+for potential_model_dir in "$SCRIPT_DIR"/*; do
+  if [[ -d "$potential_model_dir" ]] && [[ -n "$(basename "$potential_model_dir")" ]]; then
+    MODEL_NAME=$(basename "$potential_model_dir")
+    # Check if it looks like an Ollama model directory (has blobs subdirectory)
+    if [[ -d "$potential_model_dir/blobs" ]] && [[ -n "$(ls -A "$potential_model_dir/blobs" 2>/dev/null)" ]]; then
+      log "Found model directory: $MODEL_NAME"
+      DEST_MODEL_DIR="$FINAL_MODEL_DIR/$MODEL_NAME"
+      if [[ -d "$DEST_MODEL_DIR" ]]; then
+        log "Model $MODEL_NAME already exists in bundle. Skipping copy."
+      else
+        if [[ "$MOVE_MODELS" == "true" ]]; then
+          log "Moving model directory $MODEL_NAME directly to final bundle location..."
+          if mv "$potential_model_dir" "$DEST_MODEL_DIR" 2>/dev/null; then
+            log "Successfully moved $MODEL_NAME to bundle"
+          else
+            log "WARNING: Failed to move $MODEL_NAME, trying copy instead..."
+            if cp -r "$potential_model_dir" "$DEST_MODEL_DIR" 2>/dev/null; then
+              log "Successfully copied $MODEL_NAME to bundle"
+            else
+              log "ERROR: Failed to copy $MODEL_NAME to bundle"
+            fi
+          fi
+        else
+          log "Copying model directory $MODEL_NAME directly to final bundle location..."
+          if cp -r "$potential_model_dir" "$DEST_MODEL_DIR" 2>/dev/null; then
+            log "Successfully copied $MODEL_NAME to bundle"
+          else
+            log "ERROR: Failed to copy $MODEL_NAME to bundle"
+          fi
+        fi
+      fi
+    fi
+  fi
+done
+
 # Convert space-separated models to array
 read -ra MODEL_ARRAY <<< "$OLLAMA_MODELS"
 MODEL_COUNT=${#MODEL_ARRAY[@]}
@@ -650,29 +802,51 @@ debug_log "get_bundle.sh:models:init" "Model pulling initialized" "{\"model_coun
 log "Using Linux Ollama binary to pull $MODEL_COUNT model(s)..."
 
 TMP_OLLAMA="$BUNDLE_DIR/ollama/_tmp_ollama"
-rm -rf "$TMP_OLLAMA"
-mkdir -p "$TMP_OLLAMA"
 
-# Extract Linux Ollama binary
-log "Extracting Ollama binary from archive..."
-
-# Find the actual archive file
-OLLAMA_ARCHIVE_FILE=""
-if [[ -f "$BUNDLE_DIR/ollama/ollama-linux-amd64.tar.zst" ]]; then
-  OLLAMA_ARCHIVE_FILE="$BUNDLE_DIR/ollama/ollama-linux-amd64.tar.zst"
-elif [[ -f "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" ]]; then
-  OLLAMA_ARCHIVE_FILE="$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz"
-else
-  # Find any ollama-linux-amd64 archive
-  OLLAMA_ARCHIVE_FILE=$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -name "ollama-linux-amd64*" -type f ! -name "*.sha256" 2>/dev/null | head -n1)
+# Check if extraction should be skipped
+SKIP_EXTRACTION=false
+if [[ "$SKIP_VERIFICATION" == "true" ]] && [[ -d "$TMP_OLLAMA" ]]; then
+  # Check if binary already exists in extracted directory
+  OLLAMA_BIN_CHECK=""
+  if [[ -f "$TMP_OLLAMA/ollama" ]]; then
+    OLLAMA_BIN_CHECK="$TMP_OLLAMA/ollama"
+  elif [[ -f "$TMP_OLLAMA/ollama-linux-amd64/ollama" ]]; then
+    OLLAMA_BIN_CHECK="$TMP_OLLAMA/ollama-linux-amd64/ollama"
+  else
+    OLLAMA_BIN_CHECK=$(find "$TMP_OLLAMA" -name "ollama" -type f 2>/dev/null | head -n1)
+  fi
+  
+  if [[ -n "$OLLAMA_BIN_CHECK" ]] && [[ -f "$OLLAMA_BIN_CHECK" ]] && [[ -x "$OLLAMA_BIN_CHECK" ]]; then
+    log "Ollama binary already extracted. Skipping extraction (--skip-verification flag set)."
+    SKIP_EXTRACTION=true
+    TAR_EXIT=0
+  fi
 fi
 
-if [[ -z "$OLLAMA_ARCHIVE_FILE" ]] || [[ ! -f "$OLLAMA_ARCHIVE_FILE" ]]; then
-  log "ERROR: Ollama archive not found in $BUNDLE_DIR/ollama/"
-  log "Expected: ollama-linux-amd64.tar.zst or ollama-linux-amd64.tgz"
-  SKIP_MODEL_PULL=true
-else
-  log "Found Ollama archive: $OLLAMA_ARCHIVE_FILE"
+# Extract Linux Ollama binary (unless already extracted and skip flag is set)
+if [[ "$SKIP_EXTRACTION" != "true" ]]; then
+  rm -rf "$TMP_OLLAMA"
+  mkdir -p "$TMP_OLLAMA"
+  
+  log "Extracting Ollama binary from archive..."
+  
+  # Find the actual archive file
+  OLLAMA_ARCHIVE_FILE=""
+  if [[ -f "$BUNDLE_DIR/ollama/ollama-linux-amd64.tar.zst" ]]; then
+    OLLAMA_ARCHIVE_FILE="$BUNDLE_DIR/ollama/ollama-linux-amd64.tar.zst"
+  elif [[ -f "$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz" ]]; then
+    OLLAMA_ARCHIVE_FILE="$BUNDLE_DIR/ollama/ollama-linux-amd64.tgz"
+  else
+    # Find any ollama-linux-amd64 archive
+    OLLAMA_ARCHIVE_FILE=$(find "$BUNDLE_DIR/ollama" -maxdepth 1 -name "ollama-linux-amd64*" -type f ! -name "*.sha256" 2>/dev/null | head -n1)
+  fi
+  
+  if [[ -z "$OLLAMA_ARCHIVE_FILE" ]] || [[ ! -f "$OLLAMA_ARCHIVE_FILE" ]]; then
+    log "ERROR: Ollama archive not found in $BUNDLE_DIR/ollama/"
+    log "Expected: ollama-linux-amd64.tar.zst or ollama-linux-amd64.tgz"
+    SKIP_MODEL_PULL=true
+  else
+    log "Found Ollama archive: $OLLAMA_ARCHIVE_FILE"
   
   # #region agent log
   echo "{\"id\":\"log_$(date +%s)_ollama1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:entry\",\"message\":\"Starting Ollama extraction\",\"data\":{\"archive\":\"$OLLAMA_ARCHIVE_FILE\",\"dest\":\"$TMP_OLLAMA\",\"archive_exists\":$(test -f "$OLLAMA_ARCHIVE_FILE" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
@@ -759,26 +933,35 @@ else
       log "Extraction completed successfully"
     fi
   fi
-fi
-
-log "Extraction command finished with exit code: $TAR_EXIT"
-
-# #region agent log
-echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
-# #endregion
-
-# Check if extraction succeeded - even if exit code is non-zero, check if binary exists
-if [[ $TAR_EXIT -ne 0 ]]; then
-  log "WARNING: Extraction command returned exit code $TAR_EXIT"
-  log "Checking if extraction actually succeeded by looking for binary..."
-  # Check if binary exists despite non-zero exit code (sometimes tar returns warnings as errors)
-  if [[ -f "$TMP_OLLAMA/bin/ollama" ]] || find "$TMP_OLLAMA" -name "ollama" -type f 2>/dev/null | grep -q .; then
-    log "Binary found despite non-zero exit code. Continuing..."
-    TAR_EXIT=0  # Override exit code if binary exists
+  fi
+  
+  if [[ "$SKIP_EXTRACTION" != "true" ]]; then
+    log "Extraction command finished with exit code: $TAR_EXIT"
+    
+    # #region agent log
+    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+    # #endregion
+    
+    # Check if extraction succeeded - even if exit code is non-zero, check if binary exists
+    if [[ $TAR_EXIT -ne 0 ]]; then
+      log "WARNING: Extraction command returned exit code $TAR_EXIT"
+      log "Checking if extraction actually succeeded by looking for binary..."
+      # Check if binary exists despite non-zero exit code (sometimes tar returns warnings as errors)
+      if [[ -f "$TMP_OLLAMA/bin/ollama" ]] || find "$TMP_OLLAMA" -name "ollama" -type f 2>/dev/null | grep -q .; then
+        log "Binary found despite non-zero exit code. Continuing..."
+        TAR_EXIT=0  # Override exit code if binary exists
+      else
+        log "ERROR: Failed to extract Ollama tarball and binary not found"
+        log "Tar output: ${TAR_OUTPUT:0:1000}"
+        SKIP_MODEL_PULL=true
+      fi
+    fi
   else
-    log "ERROR: Failed to extract Ollama tarball and binary not found"
-    log "Tar output: ${TAR_OUTPUT:0:1000}"
-    SKIP_MODEL_PULL=true
+    # Extraction was skipped, set TAR_EXIT to 0 since we're using existing binary
+    TAR_EXIT=0
+    # #region agent log
+    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:skipped\",\"message\":\"Extraction skipped, using existing binary\",\"data\":{\"tmp_dir\":\"$TMP_OLLAMA\",\"skip_verification\":true},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+    # #endregion
   fi
 fi
 
@@ -874,11 +1057,18 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
   log "Starting Ollama server (PID will be logged)..."
   log "Using ollama command: $OLLAMA_CMD"
   
+  # Change to bundle directory before starting server to ensure any artifacts go there
+  OLD_PWD_SERVER="$PWD"
+  cd "$BUNDLE_DIR" || cd "$OLD_PWD_SERVER" || true
+  
   # #region agent log
   echo "{\"id\":\"log_$(date +%s)_ollama5\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:before_nohup\",\"message\":\"Before starting server\",\"data\":{\"ollama_cmd\":\"$OLLAMA_CMD\",\"cmd_exists\":$(test -f "$OLLAMA_CMD" && echo true || echo false),\"is_executable\":$(test -x "$OLLAMA_CMD" && echo true || echo false),\"path\":\"$PATH\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   nohup "$OLLAMA_CMD" serve >"$BUNDLE_DIR/logs/ollama_serve.log" 2>&1 &
+  
+  # Restore directory
+  cd "$OLD_PWD_SERVER" || true
   SERVE_PID=$!
   NOHUP_EXIT=$?
   
@@ -942,16 +1132,59 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
     
     PULL_FAILED=false
     for model in "${MODEL_ARRAY[@]}"; do
+      # Check if model already exists when skip-verification is set
+      SKIP_THIS_MODEL=false
+      if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+        # Check if model exists using ollama list (server should be running by now)
+        OLD_HOME="$HOME"
+        export HOME="$OLLAMA_HOME"
+        if "$OLLAMA_CMD" list 2>/dev/null | grep -q "^$model"; then
+          log "Model $model already exists in bundle. Skipping pull (--skip-verification flag set)."
+          SKIP_THIS_MODEL=true
+        fi
+        export HOME="$OLD_HOME"
+      fi
+      
+      if [[ "$SKIP_THIS_MODEL" == "true" ]]; then
+        log "Skipping pull for $model (already exists, --skip-verification flag set)"
+        continue
+      fi
+      
       log "Pulling model: $model ..."
       # Unset OLLAMA_MODELS to prevent it from interfering with ollama pull command
       # OLLAMA_MODELS is only used by our script, not by Ollama itself
-      # Change to BUNDLE_DIR to ensure all files go under airgap_bundle
-      # OLLAMA_HOME is already set to $BUNDLE_DIR/ollama/.ollama_home
-      if ! (cd "$BUNDLE_DIR" && unset OLLAMA_MODELS && "$OLLAMA_CMD" pull "$model" 2>&1 | tee -a "$BUNDLE_DIR/logs/model_pull.log"); then
+      # Temporarily set HOME to OLLAMA_HOME so Ollama uses it for ~/.ollama
+      # This ensures models go to $BUNDLE_DIR/ollama/.ollama_home/.ollama/models/
+      OLD_HOME="$HOME"
+      export HOME="$OLLAMA_HOME"
+      if ! (cd "$OLLAMA_HOME" && unset OLLAMA_MODELS && "$OLLAMA_CMD" pull "$model" 2>&1 | tee -a "$BUNDLE_DIR/logs/model_pull.log"); then
         log "WARNING: Failed to pull $model. Continuing with other models..."
         PULL_FAILED=true
       else
         log "Successfully pulled $model"
+      fi
+      # Restore HOME and PWD
+      export HOME="$OLD_HOME"
+      cd "$OLD_PWD" || true
+      # Clean up any incorrectly placed model directories that might have been created during pull
+      # Only remove if they were created during this pull (not pre-existing directories we copied earlier)
+      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      if [[ -d "$SCRIPT_DIR/$model" ]] && [[ "$SCRIPT_DIR/$model" != "$BUNDLE_DIR"* ]]; then
+        # Check if this directory was already copied to bundle (check final bundle location)
+        BUNDLE_MODEL_DIR="$BUNDLE_DIR/models/.ollama/models/$model"
+        if [[ -d "$BUNDLE_MODEL_DIR" ]] && [[ -d "$BUNDLE_MODEL_DIR/blobs" ]]; then
+          log "Model directory $model was already copied to bundle. Removing from script directory..."
+          if [[ "$MOVE_MODELS" == "true" ]]; then
+            # Already moved, just clean up
+            rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || true
+          else
+            # Was copied, safe to remove
+            rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || true
+          fi
+        else
+          log "Cleaning up incorrectly placed model directory: $SCRIPT_DIR/$model"
+          rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || true
+        fi
       fi
     done
 
@@ -973,7 +1206,9 @@ fi
 MOVE_MODELS="${MOVE_MODELS:-false}"
 
 # #region agent log
-debug_log "get_bundle.sh:models:copy_start" "Starting model copy/move operation" "{\"move_models\":\"$MOVE_MODELS\",\"home_ollama_exists\":$(test -d "$HOME/.ollama" && echo true || echo false),\"pull_failed\":\"${PULL_FAILED:-unknown}\"}" "MODEL-B" "run1"
+HOME_OLLAMA_EXISTS=false
+test -d "$HOME/.ollama" && HOME_OLLAMA_EXISTS=true || true
+debug_log "get_bundle.sh:models:copy_start" "Starting model copy/move operation" "{\"move_models\":\"$MOVE_MODELS\",\"home_ollama_exists\":$HOME_OLLAMA_EXISTS,\"pull_failed\":\"${PULL_FAILED:-unknown}\"}" "MODEL-B" "run1"
 # #endregion
 
 if [[ "$MOVE_MODELS" == "true" ]]; then
@@ -984,12 +1219,15 @@ fi
 mkdir -p "$BUNDLE_DIR/models"
 
 MODELS_COPIED=false
-# Check for models in OLLAMA_HOME (where we told Ollama to store them) first
-# Fall back to ~/.ollama for backward compatibility
+# Check for models in OLLAMA_HOME/.ollama (where we told Ollama to store them via HOME override) first
+# Then check OLLAMA_HOME directly, then fall back to ~/.ollama for backward compatibility
 OLLAMA_SOURCE=""
-if [[ -d "$OLLAMA_HOME" ]] && [[ -n "$(ls -A "$OLLAMA_HOME" 2>/dev/null)" ]]; then
+if [[ -d "$OLLAMA_HOME/.ollama" ]] && [[ -n "$(ls -A "$OLLAMA_HOME/.ollama" 2>/dev/null)" ]]; then
+  OLLAMA_SOURCE="$OLLAMA_HOME/.ollama"
+  log "Found models in OLLAMA_HOME/.ollama: $OLLAMA_SOURCE"
+elif [[ -d "$OLLAMA_HOME" ]] && [[ -n "$(ls -A "$OLLAMA_HOME" 2>/dev/null)" ]]; then
   OLLAMA_SOURCE="$OLLAMA_HOME"
-  log "Found models in OLLAMA_HOME: $OLLAMA_HOME"
+  log "Found models in OLLAMA_HOME: $OLLAMA_SOURCE"
 elif [[ -d "$HOME/.ollama" ]] && [[ -n "$(ls -A "$HOME/.ollama" 2>/dev/null)" ]]; then
   OLLAMA_SOURCE="$HOME/.ollama"
   log "Found models in ~/.ollama (fallback)"
@@ -1078,12 +1316,26 @@ if [[ "$MODELS_COPIED" == "true" ]]; then
   
   # Clean up any incorrectly placed model directories in the script's working directory
   # (These can be created if Ollama runs from the wrong directory before our fix)
+  # Only remove directories that were created during pull, not pre-existing ones we copied
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   for model in "${MODEL_ARRAY[@]}"; do
     # Check if model directory exists in script directory (not in bundle)
     if [[ -d "$SCRIPT_DIR/$model" ]] && [[ "$SCRIPT_DIR/$model" != "$BUNDLE_DIR"* ]]; then
-      log "Cleaning up incorrectly placed model directory: $SCRIPT_DIR/$model"
-      rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || log "WARNING: Could not remove $SCRIPT_DIR/$model"
+      # Check if this directory was already copied to bundle (check final bundle location)
+      BUNDLE_MODEL_DIR="$BUNDLE_DIR/models/.ollama/models/$model"
+      if [[ -d "$BUNDLE_MODEL_DIR" ]] && [[ -d "$BUNDLE_MODEL_DIR/blobs" ]]; then
+        log "Model directory $model was already copied to bundle. Removing from script directory..."
+        if [[ "$MOVE_MODELS" == "true" ]]; then
+          # Already moved, just clean up
+          rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || log "WARNING: Could not remove $SCRIPT_DIR/$model"
+        else
+          # Was copied, safe to remove
+          rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || log "WARNING: Could not remove $SCRIPT_DIR/$model"
+        fi
+      else
+        log "Cleaning up incorrectly placed model directory: $SCRIPT_DIR/$model"
+        rm -rf "$SCRIPT_DIR/$model" 2>/dev/null || log "WARNING: Could not remove $SCRIPT_DIR/$model"
+      fi
     fi
   done
   
@@ -1131,16 +1383,27 @@ if [[ -n "$VSCODIUM_DEB" ]]; then
   VSCODIUM_SHA="${VSCODIUM_DEB}.sha256"
 fi
 
-if [[ -n "$VSCODIUM_DEB" ]] && [[ -f "$VSCODIUM_DEB" ]] && [[ -f "$VSCODIUM_SHA" ]]; then
-  log "VSCodium .deb already exists, verifying..."
-  if sha256_check_file "$VSCODIUM_DEB" "$VSCODIUM_SHA"; then
-    log "VSCodium already downloaded and verified. Skipping download."
+if [[ -n "$VSCODIUM_DEB" ]] && [[ -f "$VSCODIUM_DEB" ]]; then
+  if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    log "VSCodium .deb already exists. Skipping verification (--skip-verification flag set)."
     mark_success "vscodium"
     VSCODIUM_DL_STATUS=0
+  elif [[ -f "$VSCODIUM_SHA" ]]; then
+    log "VSCodium .deb already exists, verifying..."
+    if sha256_check_file "$VSCODIUM_DEB" "$VSCODIUM_SHA"; then
+      log "VSCodium already downloaded and verified. Skipping download."
+      mark_success "vscodium"
+      VSCODIUM_DL_STATUS=0
+    else
+      log "Existing VSCodium file failed verification. Re-downloading..."
+      rm -f "$VSCODIUM_DEB" "$VSCODIUM_SHA"
+      VSCODIUM_DL_STATUS=1
+    fi
   else
-    log "Existing VSCodium file failed verification. Re-downloading..."
-    rm -f "$VSCODIUM_DEB" "$VSCODIUM_SHA"
-    VSCODIUM_DL_STATUS=1
+    # File exists but no SHA - if skip flag is not set, we need to download to verify
+    if [[ "$SKIP_VERIFICATION" != "true" ]]; then
+      VSCODIUM_DL_STATUS=1
+    fi
   fi
 else
   VSCODIUM_DL_STATUS=1
@@ -1291,6 +1554,10 @@ if [[ -n "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_VSIX" ]]; then
     log "Existing Continue VSIX is suspiciously small (${FILE_SIZE} bytes). Re-downloading..."
     rm -f "$CONTINUE_VSIX" "$CONTINUE_SHA"
     CONTINUE_DL_STATUS=1
+  elif [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    log "Continue VSIX already exists. Skipping verification (--skip-verification flag set)."
+    mark_success "continue"
+    CONTINUE_DL_STATUS=0
   elif [[ -f "$CONTINUE_SHA" ]]; then
     log "Continue VSIX already exists, verifying..."
     if sha256_check_vsix "$CONTINUE_VSIX" "$CONTINUE_SHA"; then
@@ -1299,14 +1566,20 @@ if [[ -n "$CONTINUE_VSIX" ]] && [[ -f "$CONTINUE_VSIX" ]]; then
       CONTINUE_DL_STATUS=0
     else
       log "Existing Continue VSIX failed verification. Re-downloading..."
-      rm -f "$CONTINUE_VSIX" "$CONTINUE_SHA"
+      rm -f "$CONTINUE_VSIX" "$CONTINUE_SHA" "${CONTINUE_VSIX}.verified"
       CONTINUE_DL_STATUS=1
     fi
   else
-    # File exists but no SHA256 - need to download to get SHA256
-    log "Continue VSIX exists but no SHA256 file. Re-downloading to verify..."
-    rm -f "$CONTINUE_VSIX"
-    CONTINUE_DL_STATUS=1
+    # File exists but no SHA256 - if skip flag is not set, need to download to get SHA256
+    if [[ "$SKIP_VERIFICATION" != "true" ]]; then
+      log "Continue VSIX exists but no SHA256 file. Re-downloading to verify..."
+      rm -f "$CONTINUE_VSIX"
+      CONTINUE_DL_STATUS=1
+    else
+      log "Continue VSIX already exists. Skipping verification (--skip-verification flag set)."
+      mark_success "continue"
+      CONTINUE_DL_STATUS=0
+    fi
   fi
 else
   CONTINUE_DL_STATUS=1
@@ -1532,6 +1805,10 @@ if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]]; then
     log "Existing Python extension VSIX is suspiciously small (${FILE_SIZE} bytes). Re-downloading..."
     rm -f "$PYTHON_VSIX" "$PYTHON_SHA"
     PYTHON_EXT_DL_STATUS=1
+  elif [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    log "Python extension VSIX already exists. Skipping verification (--skip-verification flag set)."
+    mark_success "python_ext"
+    PYTHON_EXT_DL_STATUS=0
   elif [[ -f "$PYTHON_SHA" ]]; then
     log "Python extension VSIX already exists, verifying..."
     if sha256_check_vsix "$PYTHON_VSIX" "$PYTHON_SHA"; then
@@ -1540,14 +1817,20 @@ if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]]; then
       PYTHON_EXT_DL_STATUS=0
     else
       log "Existing Python extension VSIX failed verification. Re-downloading..."
-      rm -f "$PYTHON_VSIX" "$PYTHON_SHA"
+      rm -f "$PYTHON_VSIX" "$PYTHON_SHA" "${PYTHON_VSIX}.verified"
       PYTHON_EXT_DL_STATUS=1
     fi
   else
-    # File exists but no SHA256 - need to download to get SHA256
-    log "Python extension VSIX exists but no SHA256 file. Re-downloading to verify..."
-    rm -f "$PYTHON_VSIX"
-    PYTHON_EXT_DL_STATUS=1
+    # File exists but no SHA256 - if skip flag is not set, need to download to get SHA256
+    if [[ "$SKIP_VERIFICATION" != "true" ]]; then
+      log "Python extension VSIX exists but no SHA256 file. Re-downloading to verify..."
+      rm -f "$PYTHON_VSIX"
+      PYTHON_EXT_DL_STATUS=1
+    else
+      log "Python extension VSIX already exists. Skipping verification (--skip-verification flag set)."
+      mark_success "python_ext"
+      PYTHON_EXT_DL_STATUS=0
+    fi
   fi
 else
   PYTHON_EXT_DL_STATUS=1
@@ -1770,6 +2053,10 @@ if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]]; then
     log "Existing Rust Analyzer extension VSIX is suspiciously small (${FILE_SIZE} bytes). Re-downloading..."
     rm -f "$RUST_VSIX" "$RUST_SHA"
     RUST_EXT_DL_STATUS=1
+  elif [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    log "Rust Analyzer extension VSIX already exists. Skipping verification (--skip-verification flag set)."
+    mark_success "rust_ext"
+    RUST_EXT_DL_STATUS=0
   elif [[ -f "$RUST_SHA" ]]; then
     log "Rust Analyzer extension VSIX already exists, verifying..."
     if sha256_check_vsix "$RUST_VSIX" "$RUST_SHA"; then
@@ -1778,14 +2065,20 @@ if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]]; then
       RUST_EXT_DL_STATUS=0
     else
       log "Existing Rust Analyzer extension VSIX failed verification. Re-downloading..."
-      rm -f "$RUST_VSIX" "$RUST_SHA"
+      rm -f "$RUST_VSIX" "$RUST_SHA" "${RUST_VSIX}.verified"
       RUST_EXT_DL_STATUS=1
     fi
   else
-    # File exists but no SHA256 - need to download to get SHA256
-    log "Rust Analyzer extension VSIX exists but no SHA256 file. Re-downloading to verify..."
-    rm -f "$RUST_VSIX"
-    RUST_EXT_DL_STATUS=1
+    # File exists but no SHA256 - if skip flag is not set, need to download to get SHA256
+    if [[ "$SKIP_VERIFICATION" != "true" ]]; then
+      log "Rust Analyzer extension VSIX exists but no SHA256 file. Re-downloading to verify..."
+      rm -f "$RUST_VSIX"
+      RUST_EXT_DL_STATUS=1
+    else
+      log "Rust Analyzer extension VSIX already exists. Skipping verification (--skip-verification flag set)."
+      mark_success "rust_ext"
+      RUST_EXT_DL_STATUS=0
+    fi
   fi
 else
   RUST_EXT_DL_STATUS=1
