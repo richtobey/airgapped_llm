@@ -1,0 +1,131 @@
+[package]
+name = "airgapped-rust-dependencies"
+version = "0.1.0"
+edition = "2021"
+description = "Popular Rust crates bundled for offline development"
+authors = ["Airgapped LLM Project"]
+
+# This Cargo.toml is used by get_bundle.sh to vendor popular Rust crates
+# for offline development. The crates listed here will be downloaded and
+# bundled into the airgap_bundle/rust/crates/vendor directory.
+
+[dependencies]
+# Async runtime and utilities
+tokio = { version = "1.35", features = ["full"] }
+async-std = { version = "1.12", features = ["attributes"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+yaml-rust = "0.4"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+ureq = "2.9"
+
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+structopt = "0.3"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+color-eyre = "0.6"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+log = "0.4"
+env_logger = "0.11"
+
+# File I/O and paths
+walkdir = "2.4"
+glob = "0.3"
+pathdiff = "0.2"
+
+# String manipulation
+regex = "1.10"
+lazy_static = "1.4"
+
+# Data structures and algorithms
+indexmap = "2.1"
+dashmap = "5.5"
+rayon = "1.8"
+
+# Date and time
+chrono = { version = "0.4", features = ["serde"] }
+time = "0.3"
+
+# Cryptography and hashing
+sha2 = "0.10"
+md5 = "0.7"
+rand = "0.8"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Database (optional, lightweight)
+rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Testing utilities
+mockall = "0.12"
+proptest = "1.4"
+
+# Configuration management
+config = "0.14"
+dotenv = "0.15"
+
+# Network utilities
+url = "2.5"
+ipnet = "2.9"
+
+# System information
+sysinfo = "0.30"
+
+# Process management
+duct = "0.13"
+
+# Compression
+flate2 = "1.0"
+zip = "0.6"
+
+# CSV parsing
+csv = "1.3"
+
+# Markdown parsing
+pulldown-cmark = "0.9"
+
+# Command execution
+which = "6.0"
+
+# Environment variables
+dirs = "5.0"
+
+# Progress bars and terminal UI
+indicatif = "0.17"
+console = "0.15"
+
+# Memory and performance
+bytes = "1.5"
+smallvec = "1.11"
+
+# Optional: Web framework (uncomment if needed)
+# axum = { version = "0.7", features = ["json"] }
+# warp = "0.3"
+
+# Optional: GraphQL (uncomment if needed)
+# async-graphql = "5.0"
+# juniper = "0.16"
+
+[dev-dependencies]
+# Testing
+tempfile = "3.9"
+pretty_assertions = "1.4"
+
+# Benchmarking
+criterion = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

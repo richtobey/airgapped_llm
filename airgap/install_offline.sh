@@ -28,24 +28,32 @@ INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 # Command-line argument parsing
 # ============
 SKIP_VERIFICATION="${SKIP_VERIFICATION:-false}"
+ALLOW_NETWORK="${ALLOW_NETWORK:-false}"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --skip-verification)
       SKIP_VERIFICATION="true"
       shift
       ;;
+    --allow-network)
+      ALLOW_NETWORK="true"
+      shift
+      ;;
     --help|-h)
-      echo "Usage: $0 [--skip-verification]"
+      echo "Usage: $0 [--skip-verification] [--allow-network]"
       echo ""
       echo "Options:"
       echo "  --skip-verification    Skip SHA256 verification of artifacts. If files exist,"
       echo "                        accept them without verification."
+      echo "  --allow-network        Allow installation even if network connection is detected."
+      echo "                        (Overrides airgap requirement check)"
       echo "  --help, -h             Show this help message"
       echo ""
       echo "Environment Variables:"
       echo "  BUNDLE_DIR            Bundle directory location (default: ./airgap_bundle)"
       echo "  INSTALL_PREFIX        Installation prefix for Ollama (default: /usr/local/bin)"
       echo "  SKIP_VERIFICATION     Set to 'true' to skip verification (same as --skip-verification flag)"
+      echo "  ALLOW_NETWORK         Set to 'true' to allow network (same as --allow-network flag)"
       exit 0
       ;;
     *)
@@ -136,90 +144,244 @@ debug_log "install_offline.sh:start" "Installation script started" "{\"bundle_di
 # ============
 # Network connectivity check - airgapped systems should have no network
 # ============
-log "Checking for network connectivity..."
-NETWORK_AVAILABLE=false
+if [[ "$ALLOW_NETWORK" == "true" ]]; then
+  log "WARNING: Skipping strict network check (--allow-network flag set)."
+  log "Installation will proceed regardless of network connectivity."
+  debug_log "install_offline.sh:network_check:skipped" "Network check skipped" "{\"allow_network\":true}" "NETWORK-A" "run1"
+else
+  log "Checking for network connectivity..."
+  NETWORK_AVAILABLE=false
 
-# Check multiple methods to detect network connectivity
-if command -v ping >/dev/null 2>&1; then
-  # Try to ping a well-known host (with short timeout)
-  if timeout 2 ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || \
-     timeout 2 ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1; then
-    NETWORK_AVAILABLE=true
-  fi
-fi
-
-# Also check if we can resolve DNS
-if ! $NETWORK_AVAILABLE && command -v host >/dev/null 2>&1; then
-  if timeout 2 host -W 1 google.com >/dev/null 2>&1; then
-    NETWORK_AVAILABLE=true
-  fi
-fi
-
-# Check for active network interfaces (excluding loopback)
-ACTIVE_IFACES=""
-if ip -o link show up 2>/dev/null | grep -v " lo:" >/dev/null 2>&1; then
-  ACTIVE_IFACES=$(ip -o link show up 2>/dev/null | awk -F': ' '$2 != "lo" {print $2}' | cut -d'@' -f1 | tr '\n' ' ')
-  # If there are active interfaces, treat as potential network availability
-  if [[ -n "$ACTIVE_IFACES" ]] && ! $NETWORK_AVAILABLE; then
-    # Interface is up, but might not have internet - try one more connectivity test
-    if curl -s --max-time 2 --connect-timeout 2 https://www.google.com >/dev/null 2>&1; then
+  # Check multiple methods to detect network connectivity
+  if command -v ping >/dev/null 2>&1; then
+    # Try to ping a well-known host (with short timeout)
+    if timeout 2 ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || \
+       timeout 2 ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1; then
       NETWORK_AVAILABLE=true
     fi
   fi
+
+  # Also check if we can resolve DNS
+  if ! $NETWORK_AVAILABLE && command -v host >/dev/null 2>&1; then
+    if timeout 2 host -W 1 google.com >/dev/null 2>&1; then
+      NETWORK_AVAILABLE=true
+    fi
+  fi
+
+  # Check for active network interfaces (excluding loopback)
+  ACTIVE_IFACES=""
+  if ip -o link show up 2>/dev/null | grep -v " lo:" >/dev/null 2>&1; then
+    ACTIVE_IFACES=$(ip -o link show up 2>/dev/null | awk -F': ' '$2 != "lo" {print $2}' | cut -d'@' -f1 | tr '\n' ' ')
+    # If there are active interfaces, treat as potential network availability
+    if [[ -n "$ACTIVE_IFACES" ]] && ! $NETWORK_AVAILABLE; then
+      # Interface is up, but might not have internet - try one more connectivity test
+      if curl -s --max-time 2 --connect-timeout 2 https://www.google.com >/dev/null 2>&1; then
+        NETWORK_AVAILABLE=true
+      fi
+    fi
+  fi
+
+  if [[ "$NETWORK_AVAILABLE" == "true" ]]; then
+    log ""
+    log "=========================================="
+    log "WARNING: NETWORK CONNECTION DETECTED"
+    log "=========================================="
+    log ""
+    log "This script is designed for AIRGAPPED systems (no network access)."
+    log "A network connection was detected, which violates the airgap requirement."
+    log ""
+    if [[ -n "$ACTIVE_IFACES" ]]; then
+      log "Active non-loopback interfaces detected: $ACTIVE_IFACES"
+    else
+      log "At least one network path appears to be active (ping/DNS/HTTP checks succeeded)."
+    fi
+    log ""
+    log "To check network status manually:"
+    log "  ip link show          # Show network interfaces"
+    log "  ip addr show          # Show IP addresses"
+    log "  ping -c 1 8.8.8.8     # Test connectivity"
+    log ""
+
+    # Offer to disable active interfaces
+    if [[ -n "$ACTIVE_IFACES" ]]; then
+      read -r -p "Do you want to disable these network interfaces now? (yes/no): " DISABLE_NET
+      if [[ "$DISABLE_NET" =~ ^[Yy](es)?$ ]]; then
+        # Create directory for network state files
+        NETWORK_STATE_DIR="${BUNDLE_DIR}/network_state"
+        mkdir -p "$NETWORK_STATE_DIR" 2>/dev/null || true
+        NETWORK_STATE_FILE="${NETWORK_STATE_DIR}/disabled_interfaces.txt"
+        RESTORE_SCRIPT="${NETWORK_STATE_DIR}/restore_network.sh"
+        
+        log "Recording network interface state before disabling..."
+        
+        # Initialize state file and restore script
+        cat > "$NETWORK_STATE_FILE" <<EOF
+# Network interfaces disabled by install_offline.sh
+# Timestamp: $(date -Is)
+# Original state captured before disabling interfaces
+EOF
+        
+        # Create restore script header
+        cat > "$RESTORE_SCRIPT" <<'RESTORE_HEADER'
+#!/usr/bin/env bash
+# Network interface restore script
+# Generated by install_offline.sh
+# This script restores network interfaces that were disabled during airgapped installation
+
+set -e
+
+# Check if running as root or with sudo
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root or with sudo" >&2
+  exit 1
 fi
 
-if [[ "$NETWORK_AVAILABLE" == "true" ]]; then
-  log ""
-  log "=========================================="
-  log "WARNING: NETWORK CONNECTION DETECTED"
-  log "=========================================="
-  log ""
-  log "This script is designed for AIRGAPPED systems (no network access)."
-  log "A network connection was detected, which violates the airgap requirement."
-  log ""
-  if [[ -n "$ACTIVE_IFACES" ]]; then
-    log "Active non-loopback interfaces detected: $ACTIVE_IFACES"
-  else
-    log "At least one network path appears to be active (ping/DNS/HTTP checks succeeded)."
-  fi
-  log ""
-  log "To check network status manually:"
-  log "  ip link show          # Show network interfaces"
-  log "  ip addr show          # Show IP addresses"
-  log "  ping -c 1 8.8.8.8     # Test connectivity"
-  log ""
+echo "=========================================="
+echo "Restoring Network Interfaces"
+echo "=========================================="
+echo ""
 
-  # Offer to disable active interfaces
-  if [[ -n "$ACTIVE_IFACES" ]]; then
-    read -r -p "Do you want to disable these network interfaces now? (yes/no): " DISABLE_NET
-    if [[ "$DISABLE_NET" =~ ^[Yy](es)?$ ]]; then
-      for iface in $ACTIVE_IFACES; do
-        [[ -z "$iface" ]] && continue
-        if sudo ip link set "$iface" down 2>/dev/null; then
-          log "  Disabled interface: $iface"
-          debug_log "install_offline.sh:network_check:disable_iface" "Interface disabled" "{\"interface\":\"$iface\",\"result\":\"success\"}" "NETWORK-B" "run1"
-        else
-          log "  WARNING: Failed to disable interface: $iface"
-          debug_log "install_offline.sh:network_check:disable_iface_failed" "Failed to disable interface" "{\"interface\":\"$iface\",\"result\":\"failed\"}" "NETWORK-B" "run1"
-        fi
-      done
-      log "Network interfaces have been disabled (best effort). Continuing installation."
-      debug_log "install_offline.sh:network_check" "Network detected but user chose to disable interfaces" "{\"network_available\":true,\"interfaces_disabled\":true,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
+RESTORE_HEADER
+        chmod +x "$RESTORE_SCRIPT"
+        
+        # Process each interface
+        DISABLED_COUNT=0
+        for iface in $ACTIVE_IFACES; do
+          [[ -z "$iface" ]] && continue
+          
+          log "  Capturing state for interface: $iface"
+          
+          # Capture interface state
+          {
+            echo ""
+            echo "=== Interface: $iface ==="
+            echo "State captured at: $(date -Is)"
+            echo ""
+            echo "--- Link Status ---"
+            ip link show "$iface" 2>/dev/null || echo "ERROR: Could not read link status"
+            echo ""
+            echo "--- IP Addresses ---"
+            ip addr show "$iface" 2>/dev/null || echo "ERROR: Could not read IP addresses"
+            echo ""
+            echo "--- Routes ---"
+            ip route show dev "$iface" 2>/dev/null || echo "No routes found"
+            echo ""
+          } >> "$NETWORK_STATE_FILE"
+          
+          # Extract IP configuration for restore script
+          IP_ADDRS=$(ip addr show "$iface" 2>/dev/null | grep -E "^\s+inet " | awk '{print $2, $4, $6}' || echo "")
+          ROUTES=$(ip route show dev "$iface" 2>/dev/null | grep -v "^default" || echo "")
+          DEFAULT_ROUTE=$(ip route show dev "$iface" 2>/dev/null | grep "^default" || echo "")
+          
+          # Add restore commands to script
+          {
+            echo "# Restore interface: $iface"
+            echo "echo \"Restoring interface: $iface\""
+            echo ""
+            
+            # Bring interface up
+            echo "if ip link set \"$iface\" up 2>/dev/null; then"
+            echo "  echo \"  ✓ Interface $iface brought up\""
+            echo "else"
+            echo "  echo \"  ✗ Failed to bring up interface $iface\""
+            echo "  exit 1"
+            echo "fi"
+            echo ""
+            
+            # Restore IP addresses
+            if [[ -n "$IP_ADDRS" ]]; then
+              echo "# Restore IP addresses for $iface"
+              while IFS= read -r ip_line; do
+                if [[ -n "$ip_line" ]]; then
+                  ip_addr=$(echo "$ip_line" | awk '{print $1}')
+                  broadcast=$(echo "$ip_line" | awk '{print $2}')
+                  scope=$(echo "$ip_line" | awk '{print $3}')
+                  
+                  if [[ -n "$broadcast" ]] && [[ "$broadcast" != "brd" ]]; then
+                    echo "ip addr add \"$ip_addr\" broadcast \"$broadcast\" dev \"$iface\" 2>/dev/null || true"
+                  else
+                    echo "ip addr add \"$ip_addr\" dev \"$iface\" 2>/dev/null || true"
+                  fi
+                fi
+              done <<< "$IP_ADDRS"
+              echo ""
+            fi
+            
+            # Restore routes
+            if [[ -n "$ROUTES" ]]; then
+              echo "# Restore routes for $iface"
+              while IFS= read -r route; do
+                if [[ -n "$route" ]]; then
+                  echo "ip route add $route 2>/dev/null || true"
+                fi
+              done <<< "$ROUTES"
+              echo ""
+            fi
+            
+            # Restore default route if present
+            if [[ -n "$DEFAULT_ROUTE" ]]; then
+              echo "# Restore default route for $iface"
+              echo "ip route add $DEFAULT_ROUTE 2>/dev/null || true"
+              echo ""
+            fi
+            
+            echo "echo \"  ✓ Interface $iface restored\""
+            echo ""
+          } >> "$RESTORE_SCRIPT"
+          
+          # Now disable the interface
+          if sudo ip link set "$iface" down 2>/dev/null; then
+            log "  ✓ Disabled interface: $iface"
+            ((DISABLED_COUNT++))
+            debug_log "install_offline.sh:network_check:disable_iface" "Interface disabled" "{\"interface\":\"$iface\",\"result\":\"success\"}" "NETWORK-B" "run1"
+          else
+            log "  ✗ WARNING: Failed to disable interface: $iface"
+            debug_log "install_offline.sh:network_check:disable_iface_failed" "Failed to disable interface" "{\"interface\":\"$iface\",\"result\":\"failed\"}" "NETWORK-B" "run1"
+          fi
+        done
+        
+        # Add footer to restore script
+        {
+          echo "echo \"\""
+          echo "echo \"==========================================\""
+          echo "echo \"Network restoration complete\""
+          echo "echo \"Restored $DISABLED_COUNT interface(s)\""
+          echo "echo \"==========================================\""
+          echo ""
+          echo "# Note: You may need to restart NetworkManager or systemd-networkd"
+          echo "# for full network functionality to be restored:"
+          echo "#   sudo systemctl restart NetworkManager"
+          echo "#   sudo systemctl restart systemd-networkd"
+        } >> "$RESTORE_SCRIPT"
+        
+        log ""
+        log "Network interfaces have been disabled (best effort)."
+        log "  - Disabled $DISABLED_COUNT interface(s)"
+        log "  - State saved to: $NETWORK_STATE_FILE"
+        log "  - Restore script created: $RESTORE_SCRIPT"
+        log ""
+        log "To restore network interfaces later, run:"
+        log "  sudo $RESTORE_SCRIPT"
+        log ""
+        log "Continuing installation..."
+        
+        debug_log "install_offline.sh:network_check" "Network detected but user chose to disable interfaces" "{\"network_available\":true,\"interfaces_disabled\":true,\"active_ifaces\":\"$ACTIVE_IFACES\",\"disabled_count\":$DISABLED_COUNT,\"state_file\":\"$NETWORK_STATE_FILE\",\"restore_script\":\"$RESTORE_SCRIPT\"}" "NETWORK-A" "run1"
+      else
+        log "Network remains enabled. To maintain a strict airgap, installation will now exit."
+        debug_log "install_offline.sh:network_check" "Network detected and user chose not to disable interfaces" "{\"network_available\":true,\"interfaces_disabled\":false,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
+        exit 1
+      fi
     else
-      log "Network remains enabled. To maintain a strict airgap, installation will now exit."
-      debug_log "install_offline.sh:network_check" "Network detected and user chose not to disable interfaces" "{\"network_available\":true,\"interfaces_disabled\":false,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
+      # No specific interfaces detected but connectivity tests succeeded; safest to exit
+      log "Unable to identify active network interfaces, but connectivity tests succeeded."
+      log "To maintain a strict airgap, installation will now exit."
+      debug_log "install_offline.sh:network_check" "Network detected without identifiable interfaces" "{\"network_available\":true,\"interfaces_disabled\":false,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
       exit 1
     fi
   else
-    # No specific interfaces detected but connectivity tests succeeded; safest to exit
-    log "Unable to identify active network interfaces, but connectivity tests succeeded."
-    log "To maintain a strict airgap, installation will now exit."
-    debug_log "install_offline.sh:network_check" "Network detected without identifiable interfaces" "{\"network_available\":true,\"interfaces_disabled\":false,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
-    exit 1
+    log "No network connectivity detected (airgap confirmed)"
+    debug_log "install_offline.sh:network_check" "Network check passed" "{\"network_available\":false,\"status\":\"airgapped\"}" "NETWORK-A" "run1"
   fi
-else
-  log "No network connectivity detected (airgap confirmed)"
-  debug_log "install_offline.sh:network_check" "Network check passed" "{\"network_available\":false,\"status\":\"airgapped\"}" "NETWORK-A" "run1"
 fi
 
 sha256_check_file() {
@@ -411,14 +573,10 @@ EOF
       if [[ $REMOTE_LINES -gt 0 ]]; then
         ((DISABLED_COUNT += REMOTE_LINES))
       fi
-      # Comment out all non-file:// sources
-      sudo sed -i.bak -e 's|^deb http|#AIRGAP-DISABLED: deb http|g' \
-                      -e 's|^deb https|#AIRGAP-DISABLED: deb https|g' \
-                      -e 's|^deb ftp|#AIRGAP-DISABLED: deb ftp|g' \
-                      -e 's|^deb-src http|#AIRGAP-DISABLED: deb-src http|g' \
-                      -e 's|^deb-src https|#AIRGAP-DISABLED: deb-src https|g' \
-                      -e 's|^deb-src ftp|#AIRGAP-DISABLED: deb-src ftp|g' \
-                      "$source_file" 2>/dev/null || true
+      # Comment out all non-file:// sources using robust regex
+      # Use -E for extended regex to handle whitespace and protocols
+      sudo sed -i.bak -E 's/^\s*deb (http|https|ftp)/#AIRGAP-DISABLED: deb \1/g' "$source_file" 2>/dev/null || true
+      sudo sed -i -E 's/^\s*deb-src (http|https|ftp)/#AIRGAP-DISABLED: deb-src \1/g' "$source_file" 2>/dev/null || true
     fi
   done
   
@@ -760,14 +918,33 @@ fi
 log "Installing Continue VSIX into VSCodium..."
 debug_log "install_offline.sh:extensions:continue_start" "Starting Continue extension installation" "{\"bundle_dir\":\"$BUNDLE_DIR\"}" "EXT-A" "run1"
 
+# Ensure we have a user directory for VSCodium extensions if running as non-root user
+if [[ $EUID -ne 0 ]]; then
+  mkdir -p "$HOME/.vscode-oss/extensions"
+fi
+
 VSIX_PATH="$(ls -1 "$BUNDLE_DIR"/continue/Continue.continue-*.vsix 2>/dev/null | head -n1)"
 if [[ -n "$VSIX_PATH" ]] && [[ -f "$VSIX_PATH" ]]; then
+  # Try to install with --install-extension
   if codium --install-extension "$VSIX_PATH" --force 2>&1; then
     log "✓ Continue extension installed"
     debug_log "install_offline.sh:extensions:continue_success" "Continue extension installed" "{\"status\":\"success\"}" "EXT-A" "run1"
   else
-    log "WARNING: Continue extension installation may have failed"
-    debug_log "install_offline.sh:extensions:continue_failed" "Continue extension installation failed" "{\"status\":\"failed\"}" "EXT-B" "run1"
+    log "WARNING: Continue extension installation via CLI failed. Attempting manual unzip..."
+    
+    # Manual installation fallback: Unzip to ~/.vscode-oss/extensions/
+    EXT_DIR="$HOME/.vscode-oss/extensions/Continue.continue-$(basename "$VSIX_PATH" .vsix | sed 's/Continue.continue-//')"
+    mkdir -p "$EXT_DIR"
+    
+    if unzip -q "$VSIX_PATH" "extension/*" -d "$EXT_DIR" 2>/dev/null; then
+      mv "$EXT_DIR/extension/"* "$EXT_DIR/"
+      rmdir "$EXT_DIR/extension"
+      log "✓ Continue extension installed (manual unzip)"
+      debug_log "install_offline.sh:extensions:continue_manual_success" "Continue extension installed manually" "{\"status\":\"success\"}" "EXT-A" "run1"
+    else
+      log "ERROR: Manual installation failed."
+      debug_log "install_offline.sh:extensions:continue_failed" "Continue extension installation failed" "{\"status\":\"failed\"}" "EXT-B" "run1"
+    fi
   fi
 else
   log "WARNING: Continue extension VSIX not found"
@@ -786,8 +963,20 @@ if [[ -n "$PYTHON_VSIX" ]] && [[ -f "$PYTHON_VSIX" ]]; then
     log "✓ Python extension installed"
     debug_log "install_offline.sh:extensions:python_success" "Python extension installed" "{\"status\":\"success\"}" "EXT-A" "run1"
   else
-    log "WARNING: Python extension installation may have failed"
-    debug_log "install_offline.sh:extensions:python_failed" "Python extension installation failed" "{\"status\":\"failed\"}" "EXT-B" "run1"
+    log "WARNING: Python extension installation via CLI failed. Attempting manual unzip..."
+    
+    EXT_DIR="$HOME/.vscode-oss/extensions/ms-python.python-$(basename "$PYTHON_VSIX" .vsix | sed 's/ms-python.python-//')"
+    mkdir -p "$EXT_DIR"
+    
+    if unzip -q "$PYTHON_VSIX" "extension/*" -d "$EXT_DIR" 2>/dev/null; then
+      mv "$EXT_DIR/extension/"* "$EXT_DIR/"
+      rmdir "$EXT_DIR/extension"
+      log "✓ Python extension installed (manual unzip)"
+      debug_log "install_offline.sh:extensions:python_manual_success" "Python extension installed manually" "{\"status\":\"success\"}" "EXT-A" "run1"
+    else
+      log "ERROR: Manual installation failed."
+      debug_log "install_offline.sh:extensions:python_failed" "Python extension installation failed" "{\"status\":\"failed\"}" "EXT-B" "run1"
+    fi
   fi
 else
   log "WARNING: Python extension VSIX not found"
@@ -807,9 +996,22 @@ if [[ -n "$RUST_VSIX" ]] && [[ -f "$RUST_VSIX" ]]; then
     mark_success "extensions"
     debug_log "install_offline.sh:extensions:rust_success" "Rust Analyzer extension installed" "{\"status\":\"success\"}" "EXT-A" "run1"
   else
-    log "WARNING: Rust Analyzer extension installation may have failed"
-    mark_failed "extensions"
-    debug_log "install_offline.sh:extensions:rust_failed" "Rust Analyzer extension installation failed" "{\"status\":\"failed\"}" "EXT-B" "run1"
+    log "WARNING: Rust Analyzer extension installation via CLI failed. Attempting manual unzip..."
+    
+    EXT_DIR="$HOME/.vscode-oss/extensions/rust-lang.rust-analyzer-$(basename "$RUST_VSIX" .vsix | sed 's/rust-lang.rust-analyzer-//')"
+    mkdir -p "$EXT_DIR"
+    
+    if unzip -q "$RUST_VSIX" "extension/*" -d "$EXT_DIR" 2>/dev/null; then
+      mv "$EXT_DIR/extension/"* "$EXT_DIR/"
+      rmdir "$EXT_DIR/extension"
+      log "✓ Rust Analyzer extension installed (manual unzip)"
+      mark_success "extensions"
+      debug_log "install_offline.sh:extensions:rust_manual_success" "Rust Analyzer extension installed manually" "{\"status\":\"success\"}" "EXT-A" "run1"
+    else
+      log "ERROR: Manual installation failed."
+      mark_failed "extensions"
+      debug_log "install_offline.sh:extensions:rust_failed" "Rust Analyzer extension installation failed" "{\"status\":\"failed\"}" "EXT-B" "run1"
+    fi
   fi
 else
   log "WARNING: Rust Analyzer extension VSIX not found"
@@ -850,10 +1052,24 @@ if [[ -n "$RUSTUP_INIT" ]]; then
     else
       # Fallback to rustup-init (will fail on airgapped systems, but we handle it gracefully)
       log "Rust not available in APT repo. Attempting rustup-init (will fail on airgapped systems)..."
-      if "$RUSTUP_INIT" -y --default-toolchain stable --profile default 2>&1 | tee /tmp/rustup-init.log; then
-        # Add cargo to PATH for current session
+      # Use --no-modify-path to prevent .bashrc changes if installation fails
+      if "$RUSTUP_INIT" -y --no-modify-path --default-toolchain stable --profile default 2>&1 | tee /tmp/rustup-init.log; then
+        
+        # Manually set up environment since we used --no-modify-path
         if [[ -f "$HOME/.cargo/env" ]]; then
           source "$HOME/.cargo/env"
+          
+          # Safely add to shell profile
+          local rc_file="$HOME/.bashrc"
+          [[ -n "$ZSH_VERSION" ]] && rc_file="$HOME/.zshrc"
+          
+          if ! grep -q "cargo/env" "$rc_file"; then
+            echo "" >> "$rc_file"
+            echo "# Rust/Cargo environment" >> "$rc_file"
+            echo '[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"' >> "$rc_file"
+            log "✓ Added safe Cargo sourcing to $rc_file"
+          fi
+          
           mark_success "rust"
           log "✓ Rust toolchain installed. Cargo is available at ~/.cargo/bin"
           debug_log "install_offline.sh:rust:success" "Rust toolchain installed successfully" "{\"status\":\"success\"}" "RUST-A" "run1"
@@ -907,16 +1123,56 @@ if [[ -d "$BUNDLE_DIR/rust/crates/vendor" ]] && [[ -n "$(ls -A "$BUNDLE_DIR/rust
     [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
     
     if command -v cargo >/dev/null 2>&1; then
-      log "To use bundled Rust crates in your project:"
-      log "  1. Copy Cargo.toml and Cargo.lock from $BUNDLE_DIR/rust/crates/ to your project"
-      log "  2. Copy the vendor directory: cp -r $BUNDLE_DIR/rust/crates/vendor <your-project>/"
-      log "  3. Add to your Cargo.toml:"
-      log "     [source.crates-io]"
-      log "     replace-with = \"vendored-sources\""
-      log "     [source.vendored-sources]"
-      log "     directory = \"vendor\""
-      log ""
-      log "Or use: cargo build --offline --frozen"
+      # Create global vendor directory
+      OFFLINE_VENDOR_DIR="$HOME/.cargo/offline_vendor"
+      mkdir -p "$OFFLINE_VENDOR_DIR"
+      
+      log "Copying vendored crates to $OFFLINE_VENDOR_DIR..."
+      debug_log "install_offline.sh:rust_crates:copy_start" "Copying vendored crates" "{\"source\":\"$BUNDLE_DIR/rust/crates/vendor\",\"dest\":\"$OFFLINE_VENDOR_DIR\"}" "RUST-D" "run1"
+      
+      if cp -r "$BUNDLE_DIR/rust/crates/vendor/"* "$OFFLINE_VENDOR_DIR/" 2>/dev/null; then
+        log "✓ Crates copied to global offline cache"
+        
+        # Configure ~/.cargo/config.toml
+        CARGO_CONFIG="$HOME/.cargo/config.toml"
+        mkdir -p "$(dirname "$CARGO_CONFIG")"
+        
+        if [[ ! -f "$CARGO_CONFIG" ]]; then
+          cat > "$CARGO_CONFIG" <<EOF
+[source.crates-io]
+replace-with = "offline-vendor"
+
+[source.offline-vendor]
+directory = "$OFFLINE_VENDOR_DIR"
+EOF
+          log "✓ Configured ~/.cargo/config.toml for offline usage"
+          debug_log "install_offline.sh:rust_crates:config_created" "Created cargo config" "{\"file\":\"$CARGO_CONFIG\"}" "RUST-D" "run1"
+        else
+          # Check if already configured
+          if grep -q "offline-vendor" "$CARGO_CONFIG"; then
+            log "✓ ~/.cargo/config.toml already configured for offline vendor"
+          else
+            # Append if not present (this is a bit risky if structure is complex, but safe for simple configs)
+            log "Updating ~/.cargo/config.toml..."
+            cat >> "$CARGO_CONFIG" <<EOF
+
+# Added by airgap installer
+[source.crates-io]
+replace-with = "offline-vendor"
+
+[source.offline-vendor]
+directory = "$OFFLINE_VENDOR_DIR"
+EOF
+            log "✓ Updated ~/.cargo/config.toml"
+            debug_log "install_offline.sh:rust_crates:config_updated" "Updated cargo config" "{\"file\":\"$CARGO_CONFIG\"}" "RUST-D" "run1"
+          fi
+        fi
+        
+        log "Cargo is now configured to compile libraries offline."
+      else
+        log "WARNING: Failed to copy vendor directory."
+        debug_log "install_offline.sh:rust_crates:copy_failed" "Failed to copy vendor dir" "{\"status\":\"failed\"}" "RUST-E" "run1"
+      fi
     else
       log "WARNING: cargo not found. Install Rust toolchain first."
     fi
@@ -930,9 +1186,37 @@ fi
 # ============
 # 9) Install Python packages (if bundled)
 # ============
-if [[ -d "$BUNDLE_DIR/python" ]] && [[ -n "$(ls -A "$BUNDLE_DIR/python" 2>/dev/null)" ]]; then
-  log "Installing Python packages from bundle..."
-  debug_log "install_offline.sh:python:start" "Starting Python package installation" "{\"bundle_dir\":\"$BUNDLE_DIR/python\"}" "PYTHON-A" "run1"
+if [[ -d "$BUNDLE_DIR/python/site-packages" ]]; then
+  log "Installing Python packages from bundle (copying pre-installed)..."
+  debug_log "install_offline.sh:python:start" "Starting Python package installation (copy)" "{\"bundle_dir\":\"$BUNDLE_DIR/python/site-packages\"}" "PYTHON-A" "run1"
+  
+  # Detect Python version
+  if command -v python3 >/dev/null 2>&1; then
+    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    USER_SITE="$HOME/.local/lib/python$PY_VER/site-packages"
+    
+    log "Detected Python $PY_VER"
+    log "Target directory: $USER_SITE"
+    
+    mkdir -p "$USER_SITE"
+    
+    if cp -r "$BUNDLE_DIR/python/site-packages/"* "$USER_SITE/" 2>/dev/null; then
+      mark_success "python"
+      log "✓ Python packages installed successfully"
+      debug_log "install_offline.sh:python:success" "Python packages copied successfully" "{\"target\":\"$USER_SITE\"}" "PYTHON-A" "run1"
+    else
+      mark_failed "python"
+      log "ERROR: Failed to copy Python packages"
+      debug_log "install_offline.sh:python:failed" "Failed to copy Python packages" "{\"status\":\"failed\"}" "PYTHON-B" "run1"
+    fi
+  else
+    mark_skipped "python"
+    log "WARNING: python3 not found. Cannot install Python packages."
+    debug_log "install_offline.sh:python:no_python" "python3 not found" "{\"status\":\"skipped\"}" "PYTHON-C" "run1"
+  fi
+elif [[ -d "$BUNDLE_DIR/python" ]] && [[ -n "$(ls -A "$BUNDLE_DIR/python" 2>/dev/null)" ]]; then
+  log "Installing Python packages from bundle (using wheels)..."
+  debug_log "install_offline.sh:python:start" "Starting Python package installation (wheels)" "{\"bundle_dir\":\"$BUNDLE_DIR/python\"}" "PYTHON-A" "run1"
   
   # Check if pip is available
   if command -v pip3 >/dev/null 2>&1 || python3 -m pip --version >/dev/null 2>&1; then
@@ -1072,6 +1356,14 @@ log " 3. Verify Rust: rustc --version (if installed)"
 log " 4. Verify Python: python3 --version && pip3 --version"
 log " 5. Open VSCodium and verify extensions are working"
 log ""
+if [[ -n "${NETWORK_STATE_DIR:-}" ]] && [[ -d "$NETWORK_STATE_DIR" ]]; then
+  log "Network Interfaces:"
+  log "  - Network interfaces were disabled during installation"
+  log "  - State saved to: $NETWORK_STATE_DIR/disabled_interfaces.txt"
+  log "  - To restore network, run: sudo $NETWORK_STATE_DIR/restore_network.sh"
+  log "  - Or use the standalone script: sudo $BUNDLE_DIR/../restore_network.sh $NETWORK_STATE_DIR"
+  log ""
+fi
 log "For troubleshooting, check:"
 log "  - Console log: $CONSOLE_LOG"
 log "  - Debug log:   $DEBUG_LOG"

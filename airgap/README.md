@@ -98,12 +98,14 @@ cd /path/to/airgap_llm
 **Options:**
 
 - `--skip-verification` - Skip SHA256 verification of artifacts. If files already exist, accept them without verification. Useful when re-running the script and you trust existing files.
+- `--allow-network` - Allow installation even if a network connection is detected. This overrides the airgap requirement check.
 
 **Environment Variables:**
 
 - `BUNDLE_DIR` - Bundle directory location (default: `./airgap_bundle`)
 - `INSTALL_PREFIX` - Installation prefix for Ollama (default: `/usr/local/bin`)
 - `SKIP_VERIFICATION` - Set to `true` to skip verification (same as `--skip-verification` flag)
+- `ALLOW_NETWORK` - Set to `true` to allow network (same as `--allow-network` flag)
 
 ## Creating the Bundle on Mac using UTM and Pop OS
 
@@ -139,13 +141,13 @@ If you don't have a physical Pop!_OS machine with internet access, you can creat
 
 3. **Select "Linux"** as the operating system
 
-4. **Choose "Boot from image"** and click **"Browse"**
-   - Navigate to and select your downloaded Pop!_OS ISO file
-   - Click **"Continue"**
-
-5. **Configure Hardware**:
+4. **Configure Hardware**:
    - **Memory**: Allocate at least **8 GB RAM** (16 GB recommended if available)
    - **CPU Cores**: Allocate at least **4 cores** (more if available)
+   - Click **"Continue"**
+
+5. **Choose "Boot from image"** and click **"Browse"**
+   - Navigate to and select your downloaded Pop!_OS ISO file
    - Click **"Continue"**
 
 6. **Storage**:
@@ -505,10 +507,10 @@ sshfs \
   -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
 
 # example
-# sshfs \
-#   richtobey@192.168.68.88:/Volumes/T7_mac/airgapped_llm \
-#   /mnt/t7_mac \
-#   -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
+sshfs \
+  richtobey@192.168.68.88:/Volumes/T7_mac/airgapped_llm \
+  /mnt/t7_mac \
+  -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
 
 
 # unmount
