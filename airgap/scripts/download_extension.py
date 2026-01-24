@@ -42,14 +42,58 @@ try:
     
     # Construct URLs using the discovered version
     vsix_name = f"{namespace}.{name}-{version}.vsix"
-    download_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/file/{vsix_name}"
+    
+    # Try to find a valid download URL
+    download_url = None
+    
+    # Method 1: Check 'files' -> 'download' in API response (most reliable)
+    if isinstance(data, dict):
+        files = data.get("files", {})
+        if isinstance(files, dict) and "download" in files:
+            download_url = files["download"]
+            print(f"Using download URL from API response: {download_url}")
+    elif isinstance(data, list) and len(data) > 0:
+        latest_data = data[0]
+        files = latest_data.get("files", {})
+        if isinstance(files, dict) and "download" in files:
+            download_url = files["download"]
+            print(f"Using download URL from API response: {download_url}")
+            
+    # Method 2: Fallback to constructed URL if API didn't provide one
+    if not download_url:
+        download_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/file/{vsix_name}"
+        print(f"Constructed download URL: {download_url}")
+
     sha256_url = f"https://open-vsx.org/api/{namespace}/{name}/{version}/sha256"
     
     # Download both
     print(f"VSIX download URL: {download_url}")
     print(f"SHA256 URL: {sha256_url}")
     print(f"Downloading {vsix_name}...")
-    urlretrieve_with_retry(download_url, str(outdir/vsix_name), max_retries=3, timeout=120)
+    
+    # Try downloading VSIX with retry
+    try:
+        urlretrieve_with_retry(download_url, str(outdir/vsix_name), max_retries=3, timeout=120)
+    except IOError as e:
+        # Check if it's a rate limit issue (small file that isn't a zip)
+        if "not a valid ZIP archive" in str(e):
+            print(f"WARNING: Download failed validation: {e}")
+            print("Checking if we got an error page...")
+            try:
+                with open(outdir/vsix_name, 'r', errors='ignore') as f:
+                    content = f.read(500)
+                    if "<!DOCTYPE html>" in content or "<html" in content:
+                        print("Received HTML instead of VSIX. Likely rate limited by Open VSX.")
+                        print("Waiting 10 seconds before retrying...")
+                        time.sleep(10)
+                        urlretrieve_with_retry(download_url, str(outdir/vsix_name), max_retries=3, timeout=120)
+                    else:
+                        raise
+            except Exception:
+                raise e
+        else:
+            raise e
+
     vsix_size = (outdir/vsix_name).stat().st_size
     
     # Open VSX returns just the hash, format it as "hash  filename"

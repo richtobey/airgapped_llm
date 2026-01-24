@@ -13,3 +13,7 @@
 .DS_Store
 clonezilla-live-amd64.iso
 
+# cache files
+scripts/__pycache__/
+
+

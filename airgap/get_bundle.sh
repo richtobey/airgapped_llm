@@ -144,6 +144,8 @@ done
 # ============
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 export DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/get_bundle_debug.log}"
+AGENT_DEBUG_LOG="/mnt/t7_mac/airgap/.cursor/debug.log"
+mkdir -p "$(dirname "$AGENT_DEBUG_LOG")" 2>/dev/null || true
 ARCH="amd64"
 # Debug log path - use bundle directory which works on both Mac and Linux
 DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/get_bundle_debug.log}"
@@ -230,7 +232,7 @@ if [[ -n "${OLLAMA_MODEL:-}" ]] && [[ -z "${OLLAMA_MODELS:-}" ]]; then
   OLLAMA_MODELS="$OLLAMA_MODEL"
 elif [[ -z "${OLLAMA_MODELS:-}" ]]; then
   # Default: bundle all recommended models
-  OLLAMA_MODELS="mistral:7b-instruct mixtral:8x7b mistral:7b-instruct-q4_K_M"
+  OLLAMA_MODELS="mistral:7b mistral:7b-instruct mixtral:8x7b mistral:7b-instruct-q4_K_M"
 fi
 
 mkdir -p \
@@ -625,9 +627,10 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     SKIP_MODEL_PULL=true
   else
     log "Found Ollama archive: $OLLAMA_ARCHIVE_FILE"
+    TAR_NONFATAL_WARNING=false
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:entry\",\"message\":\"Starting Ollama extraction\",\"data\":{\"archive\":\"$OLLAMA_ARCHIVE_FILE\",\"dest\":\"$TMP_OLLAMA\",\"archive_exists\":$(test -f "$OLLAMA_ARCHIVE_FILE" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+  echo "{\"id\":\"log_$(date +%s)_ollama1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:entry\",\"message\":\"Starting Ollama extraction\",\"data\":{\"archive\":\"$OLLAMA_ARCHIVE_FILE\",\"dest\":\"$TMP_OLLAMA\",\"archive_exists\":$(test -f "$OLLAMA_ARCHIVE_FILE" && echo true || echo false),\"archive_size\":$(stat -c %s \"$OLLAMA_ARCHIVE_FILE\" 2>/dev/null || echo 0),\"dest_fs\":\"$(stat -f -c %T \"$TMP_OLLAMA\" 2>/dev/null || echo unknown)\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   # Extract based on file type
@@ -661,7 +664,12 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
         TAR_OUTPUT=""
       fi
       
-      if [[ $TAR_EXIT -ne 0 ]]; then
+      TAR_NONFATAL_WARNING=false
+      if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_OUTPUT" == *"Cannot utime"* ]]; then
+        TAR_NONFATAL_WARNING=true
+      fi
+
+      if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "false" ]]; then
         log "WARNING: Extraction exit code: $TAR_EXIT"
         if [[ -n "$TAR_OUTPUT" ]]; then
           log "Extraction output (first 500 chars): ${TAR_OUTPUT:0:500}"
@@ -669,9 +677,15 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
         if [[ -f "$TAR_OUTPUT_FILE" ]]; then
           log "Full extraction log available at: $TAR_OUTPUT_FILE"
         fi
+      elif [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "true" ]]; then
+        log "NOTE: tar reported timestamp warnings (non-fatal). Verifying binary..."
       else
         log "Extraction completed successfully"
       fi
+
+      # #region agent log
+      echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:exit\",\"message\":\"Ollama extraction finished\",\"data\":{\"tar_exit\":$TAR_EXIT,\"tar_output_head\":\"${TAR_OUTPUT:0:120}\",\"binary_found\":$(test -f \"$TMP_OLLAMA/bin/ollama\" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
+      # #endregion
     else
       log "ERROR: zstd or unzstd not found. Cannot extract .tar.zst file."
       log "Install zstd: sudo apt-get install zstd"
@@ -699,7 +713,12 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
       TAR_OUTPUT=""
     fi
     
-    if [[ $TAR_EXIT -ne 0 ]]; then
+    TAR_NONFATAL_WARNING=false
+    if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_OUTPUT" == *"Cannot utime"* ]]; then
+      TAR_NONFATAL_WARNING=true
+    fi
+
+    if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "false" ]]; then
       log "WARNING: Extraction exit code: $TAR_EXIT"
       if [[ -n "$TAR_OUTPUT" ]]; then
         log "Extraction output (first 500 chars): ${TAR_OUTPUT:0:500}"
@@ -707,20 +726,35 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
       if [[ -f "$TAR_OUTPUT_FILE" ]]; then
         log "Full extraction log available at: $TAR_OUTPUT_FILE"
       fi
+    elif [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "true" ]]; then
+      log "NOTE: tar reported timestamp warnings (non-fatal). Verifying binary..."
     else
       log "Extraction completed successfully"
     fi
+
+    # #region agent log
+    echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:exit_tgz\",\"message\":\"Ollama tgz extraction finished\",\"data\":{\"tar_exit\":$TAR_EXIT,\"tar_output_head\":\"${TAR_OUTPUT:0:120}\",\"binary_found\":$(test -f \"$TMP_OLLAMA/bin/ollama\" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
+    # #endregion
   fi
   fi
   
   if [[ "$SKIP_EXTRACTION" != "true" ]]; then
+    if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "true" ]] && [[ -f "$TMP_OLLAMA/bin/ollama" ]]; then
+      TAR_EXIT=0
+    fi
+
     log "Extraction command finished with exit code: $TAR_EXIT"
     
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
     # #endregion
     
     # Check if extraction succeeded - even if exit code is non-zero, check if binary exists
+    if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "true" ]] && [[ -f "$TMP_OLLAMA/bin/ollama" ]]; then
+      log "NOTE: tar warnings were non-fatal and binary exists. Clearing error."
+      TAR_EXIT=0
+    fi
+
     if [[ $TAR_EXIT -ne 0 ]]; then
       log "WARNING: Extraction command returned exit code $TAR_EXIT"
       log "Checking if extraction actually succeeded by looking for binary..."
@@ -738,7 +772,7 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     # Extraction was skipped, set TAR_EXIT to 0 since we're using existing binary
     TAR_EXIT=0
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:skipped\",\"message\":\"Extraction skipped, using existing binary\",\"data\":{\"tmp_dir\":\"$TMP_OLLAMA\",\"skip_verification\":true},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:skipped\",\"message\":\"Extraction skipped, using existing binary\",\"data\":{\"tmp_dir\":\"$TMP_OLLAMA\",\"skip_verification\":true},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
     # #endregion
   fi
 fi
@@ -756,7 +790,7 @@ if [[ $TAR_EXIT -eq 0 ]]; then
   fi
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:find_binary\",\"message\":\"Binary search result\",\"data\":{\"ollama_bin\":\"$OLLAMA_BIN\",\"exists\":$(test -f "${OLLAMA_BIN:-}" && echo true || echo false),\"is_executable\":$(test -x "${OLLAMA_BIN:-}" && echo true || echo false),\"permissions\":\"$(ls -l "${OLLAMA_BIN:-}" 2>/dev/null | awk '{print $1}' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B,OLLAMA-D\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+  echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:find_binary\",\"message\":\"Binary search result\",\"data\":{\"ollama_bin\":\"$OLLAMA_BIN\",\"exists\":$(test -f "${OLLAMA_BIN:-}" && echo true || echo false),\"is_executable\":$(test -x "${OLLAMA_BIN:-}" && echo true || echo false),\"permissions\":\"$(ls -l "${OLLAMA_BIN:-}" 2>/dev/null | awk '{print $1}' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B,OLLAMA-D\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   if [[ -n "$OLLAMA_BIN" ]] && [[ -f "$OLLAMA_BIN" ]]; then
@@ -1801,7 +1835,7 @@ debug_log "get_bundle.sh:apt_repo:start" "Starting APT repo build" "{\"bundle_di
   # #endregion
   
   DEB_COUNT=$(find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" 2>/dev/null | wc -l)
-  find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" -print -exec cp -n {} "$BUNDLE_DIR/aptrepo/pool/" \;
+  find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" -print -exec cp --update=none {} "$BUNDLE_DIR/aptrepo/pool/" \;
   
   # #region agent log
   debug_log "get_bundle.sh:apt_repo:copy_complete" "Debian packages copied to repo" "{\"deb_count\":$DEB_COUNT,\"pool_dir\":\"$BUNDLE_DIR/aptrepo/pool\"}" "APT-I" "run1"
@@ -1968,7 +2002,21 @@ fi
 # ============
 # 8b) Build and bundle Rust crates (if Cargo.toml exists)
 # ============
-RUST_CARGO_TOML="${RUST_CARGO_TOML:-Cargo.toml}"
+RUST_CARGO_TOML="${RUST_CARGO_TOML:-$SCRIPT_DIR/Cargo.toml}"
+if [[ "$RUST_CARGO_TOML" != /* ]]; then
+  RUST_CARGO_TOML="$SCRIPT_DIR/$RUST_CARGO_TOML"
+fi
+
+if [[ ! -f "$RUST_CARGO_TOML" ]]; then
+  FOUND_CARGO_TOML=$(find "$SCRIPT_DIR" -maxdepth 2 -name "Cargo.toml" -type f 2>/dev/null | head -n1)
+  if [[ -n "$FOUND_CARGO_TOML" ]]; then
+    RUST_CARGO_TOML="$FOUND_CARGO_TOML"
+  fi
+fi
+
+# #region agent log
+echo "{\"id\":\"log_$(date +%s)_rust0\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:rust_crates:config\",\"message\":\"Resolved Cargo.toml path\",\"data\":{\"cargo_toml\":\"$RUST_CARGO_TOML\",\"exists\":$(test -f \"$RUST_CARGO_TOML\" && echo true || echo false),\"pwd\":\"$PWD\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"RUST-CFG\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
+# #endregion
 
 # #region agent log
 debug_log "get_bundle.sh:rust_crates:check" "Checking for Cargo.toml" "{\"cargo_toml\":\"$RUST_CARGO_TOML\",\"exists\":$(test -f "$RUST_CARGO_TOML" && echo true || echo false)}" "RUST-CRATES-A" "run1"
@@ -2045,17 +2093,46 @@ if [[ -f "$RUST_CARGO_TOML" ]]; then
     mkdir -p "$CRATES_DIR"
     
     # Copy Cargo.toml and Cargo.lock to bundle
-    cp "$RUST_CARGO_TOML" "$CRATES_DIR/"
-    if [[ -f "Cargo.lock" ]]; then
-      cp "Cargo.lock" "$CRATES_DIR/"
+    if [[ -f "$RUST_CARGO_TOML" ]]; then
+      cp "$RUST_CARGO_TOML" "$CRATES_DIR/"
+      RUST_TOML_COPIED=true
     else
-      # Generate Cargo.lock if it doesn't exist
-      log "Generating Cargo.lock..."
-      (cd "$(dirname "$RUST_CARGO_TOML")" && cargo generate-lockfile 2>/dev/null || true)
-      if [[ -f "$(dirname "$RUST_CARGO_TOML")/Cargo.lock" ]]; then
-        cp "$(dirname "$RUST_CARGO_TOML")/Cargo.lock" "$CRATES_DIR/"
+      RUST_TOML_COPIED=false
+      if [[ -f "$CRATES_DIR/Cargo.toml" ]]; then
+        log "WARNING: Source Cargo.toml not found. Using existing bundled manifest."
+      else
+        log "ERROR: Cargo.toml not found at $RUST_CARGO_TOML"
+        mark_failed "rust_crates"
+        # #region agent log
+        debug_log "get_bundle.sh:rust_crates:missing_manifest" "Cargo.toml not found" "{\"cargo_toml\":\"$RUST_CARGO_TOML\",\"exists\":false}" "RUST-CRATES-Z" "run1"
+        # #endregion
+        exit 1
       fi
     fi
+    
+    # Ensure dummy source exists in bundle for cargo to work (required for virtual manifests)
+    mkdir -p "$CRATES_DIR/src"
+    if [[ ! -f "$CRATES_DIR/src/main.rs" ]] && [[ ! -f "$CRATES_DIR/src/lib.rs" ]]; then
+      echo 'fn main() {}' > "$CRATES_DIR/src/main.rs"
+    fi
+
+    # #region agent log
+    echo "{\"id\":\"log_$(date +%s)_rust1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:rust_crates:prep\",\"message\":\"Prepared crate directory for vendor\",\"data\":{\"crates_dir\":\"$CRATES_DIR\",\"manifest_exists\":$(test -f \"$CRATES_DIR/Cargo.toml\" && echo true || echo false),\"main_exists\":$(test -f \"$CRATES_DIR/src/main.rs\" && echo true || echo false),\"lib_exists\":$(test -f \"$CRATES_DIR/src/lib.rs\" && echo true || echo false),\"toml_copied\":$RUST_TOML_COPIED,\"dir_listing\":\"$(ls -la "$CRATES_DIR" 2>/dev/null | head -20 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"RUST-A\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
+    # #endregion
+
+    if [[ -f "Cargo.lock" ]]; then
+      cp "Cargo.lock" "$CRATES_DIR/"
+    elif [[ -f "$(dirname "$RUST_CARGO_TOML")/Cargo.lock" ]]; then
+      cp "$(dirname "$RUST_CARGO_TOML")/Cargo.lock" "$CRATES_DIR/"
+    else
+      # Generate Cargo.lock in the bundle directory
+      log "Generating Cargo.lock..."
+      (cd "$CRATES_DIR" && cargo generate-lockfile 2>/dev/null || true)
+    fi
+
+    # #region agent log
+    echo "{\"id\":\"log_$(date +%s)_rust2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:rust_crates:lockfile\",\"message\":\"Cargo.lock status before vendor\",\"data\":{\"lock_exists\":$(test -f \"$CRATES_DIR/Cargo.lock\" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"RUST-B\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
+    # #endregion
     
     # Vendor all dependencies (downloads and prepares them for offline use)
     log "Vendoring Rust crates..."
@@ -2064,15 +2141,19 @@ if [[ -f "$RUST_CARGO_TOML" ]]; then
     debug_log "get_bundle.sh:rust_crates:vendor_start" "Starting cargo vendor" "{\"crates_dir\":\"$CRATES_DIR\",\"cargo_toml\":\"$CRATES_DIR/Cargo.toml\"}" "RUST-CRATES-C" "run1"
     # #endregion
     
-    (cd "$CRATES_DIR" && cargo vendor --manifest-path "$(pwd)/Cargo.toml" vendor 2>/dev/null || {
+    CARGO_VENDOR_LOG="$BUNDLE_DIR/logs/get_bundle_cargo_vendor.log"
+    (cd "$CRATES_DIR" && cargo vendor --manifest-path "$CRATES_DIR/Cargo.toml" vendor 2>"$CARGO_VENDOR_LOG")
+    VENDOR_EXIT=$?
+    if [[ $VENDOR_EXIT -ne 0 ]]; then
+      VENDOR_ERR_HEAD=$(head -n1 "$CARGO_VENDOR_LOG" 2>/dev/null || echo "unknown error")
       log "WARNING: cargo vendor failed. You may need to run it manually:"
       log "  cd $CRATES_DIR && cargo vendor"
       mark_failed "rust_crates"
       # #region agent log
-      debug_log "get_bundle.sh:rust_crates:vendor_failed" "cargo vendor failed" "{\"crates_dir\":\"$CRATES_DIR\",\"exit_code\":$?}" "RUST-CRATES-D" "run1"
+      debug_log "get_bundle.sh:rust_crates:vendor_failed" "cargo vendor failed" "{\"crates_dir\":\"$CRATES_DIR\",\"exit_code\":$VENDOR_EXIT,\"error_head\":\"$VENDOR_ERR_HEAD\"}" "RUST-CRATES-D" "run1"
       # #endregion
       exit 1
-    })
+    fi
     
     if [[ -d "$CRATES_DIR/vendor" ]]; then
       log "Rust crates bundled successfully."
