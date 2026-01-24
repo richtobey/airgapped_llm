@@ -18,7 +18,7 @@ debug_log() {
   local timestamp=$(date +%s)
   local log_entry="{\"id\":\"log_${timestamp}_$$\",\"timestamp\":${timestamp}000,\"location\":\"$location\",\"message\":\"$message\",\"data\":$data,\"sessionId\":\"$session_id\",\"runId\":\"$run_id\",\"hypothesisId\":\"$hypothesis_id\"}"
   # Use DEBUG_LOG if set, otherwise try to use BUNDLE_DIR if available, fallback to /tmp
-  local log_file="${DEBUG_LOG:-${BUNDLE_DIR:-/tmp}/logs/debug.log}"
+  local log_file="${DEBUG_LOG:-${BUNDLE_DIR:-/tmp}/logs/get_bundle_debug.log}"
   # Ensure log directory exists
   mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
   echo "$log_entry" >> "$log_file" 2>/dev/null || true
@@ -144,9 +144,9 @@ done
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 ARCH="amd64"
 # Debug log path - use bundle directory which works on both Mac and Linux
-DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/debug.log}"
+DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/get_bundle_debug.log}"
 # Console log path - captures all console output
-CONSOLE_LOG="${CONSOLE_LOG:-$BUNDLE_DIR/logs/console.log}"
+CONSOLE_LOG="${CONSOLE_LOG:-$BUNDLE_DIR/logs/get_bundle_console.log}"
 # Ensure log directories exist
 mkdir -p "$(dirname "$DEBUG_LOG")" "$(dirname "$CONSOLE_LOG")" 2>/dev/null || true
 
@@ -480,7 +480,7 @@ from pathlib import Path
 bundle = Path(sys.argv[1])
 outdir = bundle/"ollama"
 outdir.mkdir(parents=True, exist_ok=True)
-debug_log = os.environ.get("DEBUG_LOG", str(bundle/"logs"/"debug.log"))
+debug_log = os.environ.get("DEBUG_LOG", str(bundle/"logs"/"get_bundle_debug.log"))
 
 def urlopen_with_retry(url, max_retries=3, timeout=30):
     """Open URL with retry logic and timeout."""
@@ -863,7 +863,7 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
       # Use pipefail to catch errors in pipeline
       # Redirect output to a temp file to avoid buffering issues with large extractions
       # Use --no-same-owner and --no-same-permissions to avoid permission issues on network mounts
-      TAR_OUTPUT_FILE="$BUNDLE_DIR/logs/extract_ollama.log"
+      TAR_OUTPUT_FILE="$BUNDLE_DIR/logs/get_bundle_extract_ollama.log"
       set -o pipefail 2>/dev/null || true
       # Extract and redirect output to file (don't capture in variable to avoid buffering)
       # Use tar options to ignore symlink timestamp errors (common on network mounts)
@@ -904,7 +904,7 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     # Standard .tgz extraction
     log "Extracting .tgz archive..."
     log "This may take a few minutes for large archives..."
-    TAR_OUTPUT_FILE="$BUNDLE_DIR/logs/extract_ollama.log"
+    TAR_OUTPUT_FILE="$BUNDLE_DIR/logs/get_bundle_extract_ollama.log"
     # Use --no-same-owner and --no-same-permissions to avoid permission issues on network mounts
     if tar --no-same-owner --no-same-permissions -xzf "$OLLAMA_ARCHIVE_FILE" -C "$TMP_OLLAMA" >"$TAR_OUTPUT_FILE" 2>&1; then
       TAR_EXIT=0
@@ -1065,7 +1065,7 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
   echo "{\"id\":\"log_$(date +%s)_ollama5\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:before_nohup\",\"message\":\"Before starting server\",\"data\":{\"ollama_cmd\":\"$OLLAMA_CMD\",\"cmd_exists\":$(test -f "$OLLAMA_CMD" && echo true || echo false),\"is_executable\":$(test -x "$OLLAMA_CMD" && echo true || echo false),\"path\":\"$PATH\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
-  nohup "$OLLAMA_CMD" serve >"$BUNDLE_DIR/logs/ollama_serve.log" 2>&1 &
+  nohup "$OLLAMA_CMD" serve >"$BUNDLE_DIR/logs/get_bundle_ollama_serve.log" 2>&1 &
   
   # Restore directory
   cd "$OLD_PWD_SERVER" || true
@@ -1073,7 +1073,7 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
   NOHUP_EXIT=$?
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama6\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:after_nohup\",\"message\":\"After starting server\",\"data\":{\"serve_pid\":$SERVE_PID,\"nohup_exit\":$NOHUP_EXIT,\"process_exists\":$(kill -0 "$SERVE_PID" 2>/dev/null && echo true || echo false),\"log_content\":\"$(head -20 "$BUNDLE_DIR/logs/ollama_serve.log" 2>/dev/null | tr '\n' ';' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
+    echo "{\"id\":\"log_$(date +%s)_ollama6\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:start_server:after_nohup\",\"message\":\"After starting server\",\"data\":{\"serve_pid\":$SERVE_PID,\"nohup_exit\":$NOHUP_EXIT,\"process_exists\":$(kill -0 "$SERVE_PID" 2>/dev/null && echo true || echo false),\"log_content\":\"$(head -20 "$BUNDLE_DIR/logs/get_bundle_ollama_serve.log" 2>/dev/null | tr '\n' ';' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C,OLLAMA-E\"}" >> "$DEBUG_LOG" 2>/dev/null || true
   # #endregion
   
   log "Ollama server started with PID: $SERVE_PID"
@@ -1085,8 +1085,8 @@ fi
 # Verify server started (only if we tried to start it)
 if [[ -n "${SERVE_PID:-}" ]]; then
   if ! kill -0 "$SERVE_PID" 2>/dev/null; then
-    log "ERROR: Ollama server failed to start. Check logs: $BUNDLE_DIR/logs/ollama_serve.log"
-    cat "$BUNDLE_DIR/logs/ollama_serve.log" 2>/dev/null || true
+    log "ERROR: Ollama server failed to start. Check logs: $BUNDLE_DIR/logs/get_bundle_ollama_serve.log"
+    cat "$BUNDLE_DIR/logs/get_bundle_ollama_serve.log" 2>/dev/null || true
     log "Skipping model pulling. Will attempt to copy existing models if they exist."
     PULL_FAILED=true
     SKIP_MODEL_PULL=true
@@ -1157,7 +1157,7 @@ if [[ "${SKIP_MODEL_PULL:-false}" != "true" ]]; then
       # This ensures models go to $BUNDLE_DIR/ollama/.ollama_home/.ollama/models/
       OLD_HOME="$HOME"
       export HOME="$OLLAMA_HOME"
-      if ! (cd "$OLLAMA_HOME" && unset OLLAMA_MODELS && "$OLLAMA_CMD" pull "$model" 2>&1 | tee -a "$BUNDLE_DIR/logs/model_pull.log"); then
+      if ! (cd "$OLLAMA_HOME" && unset OLLAMA_MODELS && "$OLLAMA_CMD" pull "$model" 2>&1 | tee -a "$BUNDLE_DIR/logs/get_bundle_model_pull.log"); then
         log "WARNING: Failed to pull $model. Continuing with other models..."
         PULL_FAILED=true
       else
@@ -1236,7 +1236,7 @@ fi
 if [[ -z "$OLLAMA_SOURCE" ]]; then
   log "WARNING: No models found in $OLLAMA_HOME or ~/.ollama. Models were not pulled."
   if [[ "$PULL_FAILED" == "true" ]]; then
-    log "WARNING: Model pulling failed. Check logs: $BUNDLE_DIR/logs/ollama_serve.log"
+    log "WARNING: Model pulling failed. Check logs: $BUNDLE_DIR/logs/get_bundle_ollama_serve.log"
   fi
   mark_failed "models"
   # #region agent log
@@ -1340,10 +1340,10 @@ if [[ "$MODELS_COPIED" == "true" ]]; then
   done
   
   # Clean up ollama serve log if models were successfully copied
-  if [[ -f "$BUNDLE_DIR/logs/ollama_serve.log" ]]; then
+  if [[ -f "$BUNDLE_DIR/logs/get_bundle_ollama_serve.log" ]]; then
     # Keep a summary but remove the full log to save space
-    tail -50 "$BUNDLE_DIR/logs/ollama_serve.log" > "$BUNDLE_DIR/logs/ollama_serve.log.summary" 2>/dev/null || true
-    rm -f "$BUNDLE_DIR/logs/ollama_serve.log"
+    tail -50 "$BUNDLE_DIR/logs/get_bundle_ollama_serve.log" > "$BUNDLE_DIR/logs/get_bundle_ollama_serve.log.summary" 2>/dev/null || true
+    rm -f "$BUNDLE_DIR/logs/get_bundle_ollama_serve.log"
     log "Cleaned up Ollama server log (summary kept)"
   fi
 fi
@@ -1445,16 +1445,47 @@ def urlopen_with_retry(url, max_retries=3, timeout=30):
                 raise
 
 def urlretrieve_with_retry(url, filename, max_retries=3, timeout=120):
-    """Download file with retry logic and timeout."""
+    """Download file with retry logic, timeout, and integrity verification."""
     for attempt in range(1, max_retries + 1):
         try:
             request = urllib.request.Request(url)
             request.add_header('User-Agent', 'get_bundle.sh/1.0')
             with urllib.request.urlopen(request, timeout=timeout) as response:
+                # Get expected file size from Content-Length header if available
+                expected_size = response.headers.get('Content-Length')
+                if expected_size:
+                    expected_size = int(expected_size)
+                
+                # Download file in chunks to handle large files
+                downloaded_size = 0
                 with open(filename, 'wb') as f:
-                    f.write(response.read())
-            return
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+                    while True:
+                        chunk = response.read(8192)  # 8KB chunks
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                
+                # Verify file size matches Content-Length if available
+                if expected_size and downloaded_size != expected_size:
+                    raise IOError(f"Download incomplete: expected {expected_size} bytes, got {downloaded_size} bytes")
+                
+                # Verify file is not empty and is a valid ZIP file (for VSIX files)
+                if downloaded_size == 0:
+                    raise IOError("Downloaded file is empty")
+                
+                # Basic ZIP file validation (VSIX files are ZIP archives)
+                if filename.endswith('.vsix') or filename.endswith('.zip'):
+                    import zipfile
+                    try:
+                        with zipfile.ZipFile(filename, 'r') as zf:
+                            # Try to read the central directory to verify ZIP integrity
+                            zf.testzip()
+                    except zipfile.BadZipFile:
+                        raise IOError(f"Downloaded file is not a valid ZIP archive: {filename}")
+                
+                return
+        except (urllib.error.URLError, TimeoutError, OSError, IOError) as e:
             error_msg = str(e)
             if attempt < max_retries:
                 wait_time = 2 ** attempt
@@ -1872,16 +1903,47 @@ def urlopen_with_retry(url, max_retries=3, timeout=30):
                 raise
 
 def urlretrieve_with_retry(url, filename, max_retries=3, timeout=120):
-    """Download file with retry logic and timeout."""
+    """Download file with retry logic, timeout, and integrity verification."""
     for attempt in range(1, max_retries + 1):
         try:
             request = urllib.request.Request(url)
             request.add_header('User-Agent', 'get_bundle.sh/1.0')
             with urllib.request.urlopen(request, timeout=timeout) as response:
+                # Get expected file size from Content-Length header if available
+                expected_size = response.headers.get('Content-Length')
+                if expected_size:
+                    expected_size = int(expected_size)
+                
+                # Download file in chunks to handle large files
+                downloaded_size = 0
                 with open(filename, 'wb') as f:
-                    f.write(response.read())
-            return
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+                    while True:
+                        chunk = response.read(8192)  # 8KB chunks
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                
+                # Verify file size matches Content-Length if available
+                if expected_size and downloaded_size != expected_size:
+                    raise IOError(f"Download incomplete: expected {expected_size} bytes, got {downloaded_size} bytes")
+                
+                # Verify file is not empty and is a valid ZIP file (for VSIX files)
+                if downloaded_size == 0:
+                    raise IOError("Downloaded file is empty")
+                
+                # Basic ZIP file validation (VSIX files are ZIP archives)
+                if filename.endswith('.vsix') or filename.endswith('.zip'):
+                    import zipfile
+                    try:
+                        with zipfile.ZipFile(filename, 'r') as zf:
+                            # Try to read the central directory to verify ZIP integrity
+                            zf.testzip()
+                    except zipfile.BadZipFile:
+                        raise IOError(f"Downloaded file is not a valid ZIP archive: {filename}")
+                
+                return
+        except (urllib.error.URLError, TimeoutError, OSError, IOError) as e:
             error_msg = str(e)
             if attempt < max_retries:
                 wait_time = 2 ** attempt
@@ -2121,16 +2183,47 @@ def urlopen_with_retry(url, max_retries=3, timeout=30):
                 raise
 
 def urlretrieve_with_retry(url, filename, max_retries=3, timeout=120):
-    """Download file with retry logic and timeout."""
+    """Download file with retry logic, timeout, and integrity verification."""
     for attempt in range(1, max_retries + 1):
         try:
             request = urllib.request.Request(url)
             request.add_header('User-Agent', 'get_bundle.sh/1.0')
             with urllib.request.urlopen(request, timeout=timeout) as response:
+                # Get expected file size from Content-Length header if available
+                expected_size = response.headers.get('Content-Length')
+                if expected_size:
+                    expected_size = int(expected_size)
+                
+                # Download file in chunks to handle large files
+                downloaded_size = 0
                 with open(filename, 'wb') as f:
-                    f.write(response.read())
-            return
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+                    while True:
+                        chunk = response.read(8192)  # 8KB chunks
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                
+                # Verify file size matches Content-Length if available
+                if expected_size and downloaded_size != expected_size:
+                    raise IOError(f"Download incomplete: expected {expected_size} bytes, got {downloaded_size} bytes")
+                
+                # Verify file is not empty and is a valid ZIP file (for VSIX files)
+                if downloaded_size == 0:
+                    raise IOError("Downloaded file is empty")
+                
+                # Basic ZIP file validation (VSIX files are ZIP archives)
+                if filename.endswith('.vsix') or filename.endswith('.zip'):
+                    import zipfile
+                    try:
+                        with zipfile.ZipFile(filename, 'r') as zf:
+                            # Try to read the central directory to verify ZIP integrity
+                            zf.testzip()
+                    except zipfile.BadZipFile:
+                        raise IOError(f"Downloaded file is not a valid ZIP archive: {filename}")
+                
+                return
+        except (urllib.error.URLError, TimeoutError, OSError, IOError) as e:
             error_msg = str(e)
             if attempt < max_retries:
                 wait_time = 2 ** attempt
@@ -2585,16 +2678,41 @@ EOF
     debug_log "get_bundle.sh:apt_repo:empty_pool" "Pool directory is empty" "{\"status\":\"failed\"}" "APT-M" "run1"
     # #endregion
   elif command -v apt-ftparchive >/dev/null 2>&1; then
-    if apt-ftparchive packages pool > Packages 2>&1; then
+    # Build Packages index
+    # Note: Some .deb files may reference i386 architecture, but we only bundle amd64
+    # Filter the Packages file to only include amd64 and all (architecture-independent) packages
+    # This prevents "file not found" errors when APT looks for binary-i386/Packages
+    if apt-ftparchive packages pool > Packages.raw 2>&1; then
       APT_INDEX_EXIT=0
+      # Filter Packages file: keep only packages with Architecture: amd64 or Architecture: all
+      # This prevents APT from looking for non-existent i386 Packages files
+      awk '
+        BEGIN { RS=""; FS="\n" }
+        {
+          for (i=1; i<=NF; i++) {
+            if ($i ~ /^Architecture: (amd64|all)$/) {
+              print $0
+              print ""
+              break
+            }
+          }
+        }
+      ' Packages.raw > Packages 2>/dev/null || {
+        # Fallback: if awk fails, just remove i386 lines (less precise but works)
+        grep -v "Architecture: i386" Packages.raw | \
+        awk '/^Package:/{p=1; b=""} p{b=b"\n"$0} /^$/{if(b~/Architecture: (amd64|all)/) print b"\n"; p=0; b=""}' > Packages 2>/dev/null || cp Packages.raw Packages
+      }
+      rm -f Packages.raw
+      log "APT repo Packages index built (amd64/all only, i386 filtered)."
     else
       APT_INDEX_EXIT=$?
       log "WARNING: apt-ftparchive failed with exit code $APT_INDEX_EXIT"
+      rm -f Packages.raw
     fi
     
     if [[ $APT_INDEX_EXIT -eq 0 ]]; then
       gzip -kf Packages
-      log "APT repo built."
+      log "APT repo built (amd64 only, i386 references filtered)."
       mark_success "apt_repo"
     else
       log "WARNING: Skipping Packages.gz creation due to index build failure"
@@ -2654,16 +2772,47 @@ outdir = bundle/"rust"/"toolchain"
 outdir.mkdir(parents=True, exist_ok=True)
 
 def urlretrieve_with_retry(url, filename, max_retries=3, timeout=120):
-    """Download file with retry logic and timeout."""
+    """Download file with retry logic, timeout, and integrity verification."""
     for attempt in range(1, max_retries + 1):
         try:
             request = urllib.request.Request(url)
             request.add_header('User-Agent', 'get_bundle.sh/1.0')
             with urllib.request.urlopen(request, timeout=timeout) as response:
+                # Get expected file size from Content-Length header if available
+                expected_size = response.headers.get('Content-Length')
+                if expected_size:
+                    expected_size = int(expected_size)
+                
+                # Download file in chunks to handle large files
+                downloaded_size = 0
                 with open(filename, 'wb') as f:
-                    f.write(response.read())
-            return
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+                    while True:
+                        chunk = response.read(8192)  # 8KB chunks
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                
+                # Verify file size matches Content-Length if available
+                if expected_size and downloaded_size != expected_size:
+                    raise IOError(f"Download incomplete: expected {expected_size} bytes, got {downloaded_size} bytes")
+                
+                # Verify file is not empty and is a valid ZIP file (for VSIX files)
+                if downloaded_size == 0:
+                    raise IOError("Downloaded file is empty")
+                
+                # Basic ZIP file validation (VSIX files are ZIP archives)
+                if filename.endswith('.vsix') or filename.endswith('.zip'):
+                    import zipfile
+                    try:
+                        with zipfile.ZipFile(filename, 'r') as zf:
+                            # Try to read the central directory to verify ZIP integrity
+                            zf.testzip()
+                    except zipfile.BadZipFile:
+                        raise IOError(f"Downloaded file is not a valid ZIP archive: {filename}")
+                
+                return
+        except (urllib.error.URLError, TimeoutError, OSError, IOError) as e:
             error_msg = str(e)
             if attempt < max_retries:
                 wait_time = 2 ** attempt

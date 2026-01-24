@@ -10,3 +10,5 @@ logs/
 .pytest_cache/
 .DS_Store
 
+output?.txt
+

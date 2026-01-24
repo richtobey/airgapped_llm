@@ -55,6 +55,27 @@ cd airgap
 
 Installs the airgap bundle on the target Pop!_OS system. **Only installs pre-built packages** - no compilation or building happens on the airgapped system.
 
+### `uninstall_offline.sh`
+
+Removes all components installed by `install_offline.sh`. This includes:
+
+- APT packages (development tools and libraries)
+- VSCodium (code editor)
+- Ollama binary and models (with confirmation)
+- VSCode extensions (Continue, Python, Rust Analyzer)
+- Rust toolchain (if installed via rustup)
+- Python packages (from bundle requirements.txt)
+- APT source list entry
+- Ollama GPU configuration from shell profiles
+
+**Usage:**
+
+```bash
+./uninstall_offline.sh
+```
+
+The script will prompt for confirmation before removing components, and will ask separately about removing Ollama models (which can be large).
+
 Installs the following components:
 
 - System libraries and development tools (from offline APT repo) - **pre-built .deb packages**
@@ -70,14 +91,19 @@ Installs the following components:
 **Usage:**
 
 ```bash
-cd /path/to/airgap_bundle
+cd /path/to/airgap_llm
 ./install_offline.sh
 ```
+
+**Options:**
+
+- `--skip-verification` - Skip SHA256 verification of artifacts. If files already exist, accept them without verification. Useful when re-running the script and you trust existing files.
 
 **Environment Variables:**
 
 - `BUNDLE_DIR` - Bundle directory location (default: `./airgap_bundle`)
 - `INSTALL_PREFIX` - Installation prefix for Ollama (default: `/usr/local/bin`)
+- `SKIP_VERIFICATION` - Set to `true` to skip verification (same as `--skip-verification` flag)
 
 ## Creating the Bundle on Mac using UTM and Pop OS
 
@@ -474,9 +500,15 @@ On linux run:
 
 ```bash
 sshfs \
-  richtobey@192.168.68.88:/Volumes/T7_mac/airgapped_llm \
+  username@<ipaddress_of_mac_host>:/Volumes/T7_mac/airgapped_llm \
   /mnt/t7_mac \
   -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
+
+# example
+# sshfs \
+#   richtobey@192.168.68.88:/Volumes/T7_mac/airgapped_llm \
+#   /mnt/t7_mac \
+#   -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
 
 
 # unmount

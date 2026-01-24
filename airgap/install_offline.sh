@@ -25,12 +25,44 @@ BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 
 # ============
+# Command-line argument parsing
+# ============
+SKIP_VERIFICATION="${SKIP_VERIFICATION:-false}"
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --skip-verification)
+      SKIP_VERIFICATION="true"
+      shift
+      ;;
+    --help|-h)
+      echo "Usage: $0 [--skip-verification]"
+      echo ""
+      echo "Options:"
+      echo "  --skip-verification    Skip SHA256 verification of artifacts. If files exist,"
+      echo "                        accept them without verification."
+      echo "  --help, -h             Show this help message"
+      echo ""
+      echo "Environment Variables:"
+      echo "  BUNDLE_DIR            Bundle directory location (default: ./airgap_bundle)"
+      echo "  INSTALL_PREFIX        Installation prefix for Ollama (default: /usr/local/bin)"
+      echo "  SKIP_VERIFICATION     Set to 'true' to skip verification (same as --skip-verification flag)"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Use --help for usage information" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# ============
 # Logging Setup
 # ============
 # Debug log path - structured JSON logging for debugging
-DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/install_debug.log}"
+DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/install_offline_debug.log}"
 # Console log path - captures all console output
-CONSOLE_LOG="${CONSOLE_LOG:-$BUNDLE_DIR/logs/install_console.log}"
+CONSOLE_LOG="${CONSOLE_LOG:-$BUNDLE_DIR/logs/install_offline_console.log}"
 # Ensure log directories exist
 mkdir -p "$(dirname "$DEBUG_LOG")" "$(dirname "$CONSOLE_LOG")" 2>/dev/null || true
 
@@ -101,9 +133,111 @@ fi
 # Log script start
 debug_log "install_offline.sh:start" "Installation script started" "{\"bundle_dir\":\"$BUNDLE_DIR\",\"install_prefix\":\"$INSTALL_PREFIX\",\"os\":\"$OS\",\"user\":\"$USER\",\"pid\":$$}" "INIT-A" "run1"
 
+# ============
+# Network connectivity check - airgapped systems should have no network
+# ============
+log "Checking for network connectivity..."
+NETWORK_AVAILABLE=false
+
+# Check multiple methods to detect network connectivity
+if command -v ping >/dev/null 2>&1; then
+  # Try to ping a well-known host (with short timeout)
+  if timeout 2 ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 || \
+     timeout 2 ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1; then
+    NETWORK_AVAILABLE=true
+  fi
+fi
+
+# Also check if we can resolve DNS
+if ! $NETWORK_AVAILABLE && command -v host >/dev/null 2>&1; then
+  if timeout 2 host -W 1 google.com >/dev/null 2>&1; then
+    NETWORK_AVAILABLE=true
+  fi
+fi
+
+# Check for active network interfaces (excluding loopback)
+ACTIVE_IFACES=""
+if ip -o link show up 2>/dev/null | grep -v " lo:" >/dev/null 2>&1; then
+  ACTIVE_IFACES=$(ip -o link show up 2>/dev/null | awk -F': ' '$2 != "lo" {print $2}' | cut -d'@' -f1 | tr '\n' ' ')
+  # If there are active interfaces, treat as potential network availability
+  if [[ -n "$ACTIVE_IFACES" ]] && ! $NETWORK_AVAILABLE; then
+    # Interface is up, but might not have internet - try one more connectivity test
+    if curl -s --max-time 2 --connect-timeout 2 https://www.google.com >/dev/null 2>&1; then
+      NETWORK_AVAILABLE=true
+    fi
+  fi
+fi
+
+if [[ "$NETWORK_AVAILABLE" == "true" ]]; then
+  log ""
+  log "=========================================="
+  log "WARNING: NETWORK CONNECTION DETECTED"
+  log "=========================================="
+  log ""
+  log "This script is designed for AIRGAPPED systems (no network access)."
+  log "A network connection was detected, which violates the airgap requirement."
+  log ""
+  if [[ -n "$ACTIVE_IFACES" ]]; then
+    log "Active non-loopback interfaces detected: $ACTIVE_IFACES"
+  else
+    log "At least one network path appears to be active (ping/DNS/HTTP checks succeeded)."
+  fi
+  log ""
+  log "To check network status manually:"
+  log "  ip link show          # Show network interfaces"
+  log "  ip addr show          # Show IP addresses"
+  log "  ping -c 1 8.8.8.8     # Test connectivity"
+  log ""
+
+  # Offer to disable active interfaces
+  if [[ -n "$ACTIVE_IFACES" ]]; then
+    read -r -p "Do you want to disable these network interfaces now? (yes/no): " DISABLE_NET
+    if [[ "$DISABLE_NET" =~ ^[Yy](es)?$ ]]; then
+      for iface in $ACTIVE_IFACES; do
+        [[ -z "$iface" ]] && continue
+        if sudo ip link set "$iface" down 2>/dev/null; then
+          log "  Disabled interface: $iface"
+          debug_log "install_offline.sh:network_check:disable_iface" "Interface disabled" "{\"interface\":\"$iface\",\"result\":\"success\"}" "NETWORK-B" "run1"
+        else
+          log "  WARNING: Failed to disable interface: $iface"
+          debug_log "install_offline.sh:network_check:disable_iface_failed" "Failed to disable interface" "{\"interface\":\"$iface\",\"result\":\"failed\"}" "NETWORK-B" "run1"
+        fi
+      done
+      log "Network interfaces have been disabled (best effort). Continuing installation."
+      debug_log "install_offline.sh:network_check" "Network detected but user chose to disable interfaces" "{\"network_available\":true,\"interfaces_disabled\":true,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
+    else
+      log "Network remains enabled. To maintain a strict airgap, installation will now exit."
+      debug_log "install_offline.sh:network_check" "Network detected and user chose not to disable interfaces" "{\"network_available\":true,\"interfaces_disabled\":false,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
+      exit 1
+    fi
+  else
+    # No specific interfaces detected but connectivity tests succeeded; safest to exit
+    log "Unable to identify active network interfaces, but connectivity tests succeeded."
+    log "To maintain a strict airgap, installation will now exit."
+    debug_log "install_offline.sh:network_check" "Network detected without identifiable interfaces" "{\"network_available\":true,\"interfaces_disabled\":false,\"active_ifaces\":\"$ACTIVE_IFACES\"}" "NETWORK-A" "run1"
+    exit 1
+  fi
+else
+  log "No network connectivity detected (airgap confirmed)"
+  debug_log "install_offline.sh:network_check" "Network check passed" "{\"network_available\":false,\"status\":\"airgapped\"}" "NETWORK-A" "run1"
+fi
+
 sha256_check_file() {
   local file="$1"
   local sha_file="$2"
+  
+  # Skip verification if flag is set
+  if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    if [[ -f "$file" ]]; then
+      log "Skipping verification (--skip-verification flag set). Accepting existing file: $(basename "$file")"
+      debug_log "install_offline.sh:sha256_check_file:skipped" "SHA256 check skipped" "{\"file\":\"$file\",\"reason\":\"skip_verification_flag\"}" "VERIFY-A" "run1"
+      return 0
+    else
+      log "ERROR: File not found: $file"
+      return 1
+    fi
+  fi
+  
   (cd "$(dirname "$file")" && sha256sum -c "$(basename "$sha_file")")
 }
 
@@ -111,6 +245,18 @@ sha256_check_file() {
 sha256_check_vsix() {
   local file="$1"
   local sha_file="$2"
+  
+  # Skip verification if flag is set
+  if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+    if [[ -f "$file" ]]; then
+      log "Skipping verification (--skip-verification flag set). Accepting existing file: $(basename "$file")"
+      debug_log "install_offline.sh:sha256_check_vsix:skipped" "VSIX verification skipped" "{\"file\":\"$file\",\"reason\":\"skip_verification_flag\"}" "VERIFY-A" "run1"
+      return 0
+    else
+      log "ERROR: File not found: $file"
+      return 1
+    fi
+  fi
   
   # Read the hash from the file (might be just hash or "hash filename")
   local expected_hash
@@ -143,7 +289,11 @@ sha256_check_vsix() {
 test -d "$BUNDLE_DIR" || { echo "Bundle dir not found: $BUNDLE_DIR"; exit 1; }
 
 # Re-verify hashes on the airgapped machine (defense-in-depth)
-log "Re-verifying downloaded artifacts..."
+if [[ "$SKIP_VERIFICATION" == "true" ]]; then
+  log "Skipping artifact verification (--skip-verification flag set)..."
+else
+  log "Re-verifying downloaded artifacts..."
+fi
 
 # Find Ollama archive (could be .tar.zst or .tgz)
 OLLAMA_ARCHIVE=""
@@ -164,15 +314,43 @@ fi
 
 if [[ -n "$OLLAMA_ARCHIVE" ]] && [[ -f "$OLLAMA_SHA" ]]; then
   sha256_check_file "$OLLAMA_ARCHIVE" "$OLLAMA_SHA"
+elif [[ -n "$OLLAMA_ARCHIVE" ]] && [[ "$SKIP_VERIFICATION" == "true" ]]; then
+  log "Ollama archive found. Skipping verification (--skip-verification flag set)."
+elif [[ -n "$OLLAMA_ARCHIVE" ]]; then
+  log "WARNING: Ollama archive found but SHA256 file not found. Skipping verification."
 else
-  log "WARNING: Ollama archive or SHA256 file not found. Skipping verification."
+  log "WARNING: Ollama archive not found. Skipping verification."
 fi
 
-sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256
-sha256_check_vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256
-sha256_check_vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256
-sha256_check_vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256
-log "All artifact hashes OK."
+if [[ "$SKIP_VERIFICATION" != "true" ]]; then
+  sha256_check_file "$BUNDLE_DIR/vscodium/"*_amd64.deb "$BUNDLE_DIR/vscodium/"*_amd64.deb.sha256
+  sha256_check_vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix "$BUNDLE_DIR/continue/"Continue.continue-*.vsix.sha256
+  sha256_check_vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix.sha256
+  sha256_check_vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix.sha256
+  log "All artifact hashes OK."
+else
+  # With skip-verification, just check that files exist
+  files_ok=true
+  if ! ls -1 "$BUNDLE_DIR/vscodium/"*_amd64.deb >/dev/null 2>&1; then
+    log "WARNING: VSCodium .deb not found"
+    files_ok=false
+  fi
+  if ! ls -1 "$BUNDLE_DIR/continue/"Continue.continue-*.vsix >/dev/null 2>&1; then
+    log "WARNING: Continue VSIX not found"
+    files_ok=false
+  fi
+  if ! ls -1 "$BUNDLE_DIR/extensions/"ms-python.python-*.vsix >/dev/null 2>&1; then
+    log "WARNING: Python extension VSIX not found"
+    files_ok=false
+  fi
+  if ! ls -1 "$BUNDLE_DIR/extensions/"rust-lang.rust-analyzer-*.vsix >/dev/null 2>&1; then
+    log "WARNING: Rust Analyzer extension VSIX not found"
+    files_ok=false
+  fi
+  if [[ "$files_ok" == "true" ]]; then
+    log "All artifact files found (verification skipped)."
+  fi
+fi
 
 # ============
 # 1) Install offline APT repo (Lua 5.3 and prereqs)
@@ -214,15 +392,46 @@ EOF
     debug_log "install_offline.sh:apt_repo:sources_failed" "Failed to configure APT sources" "{\"status\":\"failed\"}" "APT-B" "run1"
   fi
 
+  # Backup existing sources and temporarily disable remote sources to prevent internet access
+  log "Temporarily disabling remote APT sources to prevent internet access..."
+  APT_SOURCES_BACKUP="/tmp/apt-sources-backup-$$"
+  sudo mkdir -p "$APT_SOURCES_BACKUP" 2>/dev/null || true
+  
+  # Log current APT sources before modification
+  APT_SOURCES_BEFORE=$(cat /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null | grep -v "^#" | grep -v "^$" || echo "")
+  debug_log "install_offline.sh:apt_repo:sources_before" "APT sources before modification" "{\"sources\":\"${APT_SOURCES_BEFORE:0:500}\"}" "APT-A" "run1"
+  
+  # Backup and disable all remote sources (http/https/ftp)
+  DISABLED_COUNT=0
+  for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    if [[ -f "$source_file" ]] && [[ "$source_file" != "/etc/apt/sources.list.d/airgap-local.list" ]]; then
+      sudo cp "$source_file" "$APT_SOURCES_BACKUP/$(basename "$source_file")" 2>/dev/null || true
+      # Count how many lines will be disabled
+      REMOTE_LINES=$(grep -E "^deb (http|https|ftp)" "$source_file" 2>/dev/null | wc -l || echo "0")
+      if [[ $REMOTE_LINES -gt 0 ]]; then
+        ((DISABLED_COUNT += REMOTE_LINES))
+      fi
+      # Comment out all non-file:// sources
+      sudo sed -i.bak -e 's|^deb http|#AIRGAP-DISABLED: deb http|g' \
+                      -e 's|^deb https|#AIRGAP-DISABLED: deb https|g' \
+                      -e 's|^deb ftp|#AIRGAP-DISABLED: deb ftp|g' \
+                      -e 's|^deb-src http|#AIRGAP-DISABLED: deb-src http|g' \
+                      -e 's|^deb-src https|#AIRGAP-DISABLED: deb-src https|g' \
+                      -e 's|^deb-src ftp|#AIRGAP-DISABLED: deb-src ftp|g' \
+                      "$source_file" 2>/dev/null || true
+    fi
+  done
+  
+  log "Disabled $DISABLED_COUNT remote APT source entries"
+  debug_log "install_offline.sh:apt_repo:sources_disabled" "Remote APT sources disabled" "{\"backup_dir\":\"$APT_SOURCES_BACKUP\",\"disabled_count\":$DISABLED_COUNT}" "APT-A" "run1"
+
   # Update APT from local repo only
-  # Note: If system has other sources configured, they may fail (expected on airgapped system)
-  # The local file:// source will work regardless
   log "Updating APT package lists from local repository..."
   debug_log "install_offline.sh:apt_repo:update_start" "Starting APT update" "{\"repo_dir\":\"$REPO_DIR\"}" "APT-A" "run1"
   
-  # Disable network access for apt-get to ensure it only uses local repo
+  # Use --no-download to prevent any network access
   APT_UPDATE_EXIT=0
-  if sudo apt-get update -y -o Acquire::http::Timeout=1 -o Acquire::ftp::Timeout=1 2>&1 | grep -v "Failed to fetch" || true; then
+  if sudo apt-get update -y --no-download -o Acquire::http::Timeout=1 -o Acquire::ftp::Timeout=1 -o Acquire::AllowInsecureRepositories=false 2>&1; then
     APT_UPDATE_EXIT=0
   else
     APT_UPDATE_EXIT=$?
@@ -232,7 +441,7 @@ EOF
   
   if [[ $APT_UPDATE_EXIT -ne 0 ]]; then
     log "WARNING: apt-get update had issues (exit code: $APT_UPDATE_EXIT)"
-    log "This may be expected if other sources are configured. Continuing..."
+    log "This may be expected. Continuing with package installation..."
   fi
   
   log "Installing development tools and system libraries from offline repo..."
@@ -240,8 +449,9 @@ EOF
   
   # Install all packages from the offline repo
   # This includes build tools, Python dev tools, and system libraries for Python packages
+  # Use --no-download to prevent any network access
   APT_INSTALL_EXIT=0
-  if sudo apt-get install -y \
+  if sudo apt-get install -y --no-download \
     lua5.3 \
     git \
     git-lfs \
@@ -317,9 +527,8 @@ log "Installing VSCodium..."
 debug_log "install_offline.sh:vscodium:start" "Starting VSCodium installation" "{\"bundle_dir\":\"$BUNDLE_DIR\"}" "VSCODE-A" "run1"
 
 VSCODE_DEB=""
-if [[ -f "$BUNDLE_DIR/vscodium/"*_amd64.deb ]]; then
-  VSCODE_DEB=$(ls -1 "$BUNDLE_DIR"/vscodium/*_amd64.deb 2>/dev/null | head -n1)
-fi
+# Find VSCodium .deb file (handle glob pattern correctly)
+VSCODE_DEB=$(ls -1 "$BUNDLE_DIR"/vscodium/*_amd64.deb 2>/dev/null | head -n1)
 
 if [[ -z "$VSCODE_DEB" ]] || [[ ! -f "$VSCODE_DEB" ]]; then
   log "ERROR: VSCodium .deb package not found"
@@ -336,7 +545,7 @@ else
   
   # Fix deps from the local repo (no downloads)
   log "Fixing dependencies from local repo..."
-  if sudo apt-get -y -o Acquire::Languages=none --no-download -f install 2>&1; then
+  if sudo apt-get -y --no-download -o Acquire::Languages=none -f install 2>&1; then
     APT_FIX_EXIT=0
     mark_success "vscodium"
     log "✓ VSCodium installed successfully"
@@ -396,7 +605,7 @@ if [[ "$OLLAMA_ARCHIVE" == *.tar.zst ]]; then
     log "ERROR: zstd or unzstd not found. Cannot extract .tar.zst file."
     log "Attempting to install zstd from offline APT repo..."
     # Try to install zstd from the offline repo (should be in the bundle)
-    if sudo apt-get install -y -o Acquire::Languages=none --no-download zstd 2>/dev/null; then
+    if sudo apt-get install -y --no-download -o Acquire::Languages=none zstd 2>/dev/null; then
       log "✓ zstd installed from offline repo"
       # Try extraction again
       if command -v unzstd >/dev/null 2>&1; then
@@ -629,49 +838,63 @@ if [[ -n "$RUSTUP_INIT" ]]; then
     mark_success "rust"
     debug_log "install_offline.sh:rust:already_installed" "Rust already installed" "{\"status\":\"success\"}" "RUST-A" "run1"
   else
-    log "Running rustup-init (this will install Rust to ~/.cargo/bin)..."
     log "NOTE: rustup-init requires internet access to download the Rust toolchain."
-    log "      If you are on an airgapped system, rustup-init will fail."
-    log "      You can install Rust later when you have internet access, or"
-    log "      use the system package manager: sudo apt-get install -y rustc cargo"
+    log "      On an airgapped system, rustup-init will fail."
+    log "      Attempting to install Rust from APT repo instead..."
     
-    # Try to run rustup-init, but don't fail if it can't download (offline)
-    # rustup-init will fail gracefully if it can't reach the internet
-    if "$RUSTUP_INIT" -y --default-toolchain stable --profile default 2>&1 | tee /tmp/rustup-init.log; then
-      # Add cargo to PATH for current session
-      if [[ -f "$HOME/.cargo/env" ]]; then
-        source "$HOME/.cargo/env"
-        mark_success "rust"
-        log "✓ Rust toolchain installed. Cargo is available at ~/.cargo/bin"
-        debug_log "install_offline.sh:rust:success" "Rust toolchain installed successfully" "{\"status\":\"success\"}" "RUST-A" "run1"
-      else
-        mark_failed "rust"
-        log "WARNING: rustup-init completed but ~/.cargo/env not found"
-        debug_log "install_offline.sh:rust:env_missing" "rustup-init completed but cargo env not found" "{\"status\":\"failed\"}" "RUST-B" "run1"
-      fi
+    # Try to install Rust from APT repo first (offline-friendly)
+    if sudo apt-get install -y --no-download rustc cargo 2>&1; then
+      mark_success "rust"
+      log "✓ Rust installed from APT repo"
+      debug_log "install_offline.sh:rust:apt_install_success" "Rust installed from APT repo" "{\"status\":\"success\"}" "RUST-A" "run1"
     else
-      RUSTUP_ERROR=$(cat /tmp/rustup-init.log 2>/dev/null | grep -i "network\|download\|fetch\|connection" | head -1 || echo "")
-      if [[ -n "$RUSTUP_ERROR" ]]; then
-        mark_skipped "rust"
-        log "WARNING: rustup-init failed (likely due to no internet access)."
-        log "         This is expected on airgapped systems."
-        log "         Install Rust later with: sudo apt-get install -y rustc cargo"
-        log "         Or run rustup-init when you have internet access."
-        debug_log "install_offline.sh:rust:network_error" "rustup-init failed due to network" "{\"status\":\"skipped\",\"error\":\"network\"}" "RUST-C" "run1"
+      # Fallback to rustup-init (will fail on airgapped systems, but we handle it gracefully)
+      log "Rust not available in APT repo. Attempting rustup-init (will fail on airgapped systems)..."
+      if "$RUSTUP_INIT" -y --default-toolchain stable --profile default 2>&1 | tee /tmp/rustup-init.log; then
+        # Add cargo to PATH for current session
+        if [[ -f "$HOME/.cargo/env" ]]; then
+          source "$HOME/.cargo/env"
+          mark_success "rust"
+          log "✓ Rust toolchain installed. Cargo is available at ~/.cargo/bin"
+          debug_log "install_offline.sh:rust:success" "Rust toolchain installed successfully" "{\"status\":\"success\"}" "RUST-A" "run1"
+        else
+          mark_failed "rust"
+          log "WARNING: rustup-init completed but ~/.cargo/env not found"
+          debug_log "install_offline.sh:rust:env_missing" "rustup-init completed but cargo env not found" "{\"status\":\"failed\"}" "RUST-B" "run1"
+        fi
       else
-        mark_failed "rust"
-        log "WARNING: rustup-init failed. Check /tmp/rustup-init.log for details."
-        debug_log "install_offline.sh:rust:failed" "rustup-init failed" "{\"status\":\"failed\"}" "RUST-B" "run1"
+        RUSTUP_ERROR=$(cat /tmp/rustup-init.log 2>/dev/null | grep -i "network\|download\|fetch\|connection" | head -1 || echo "")
+        if [[ -n "$RUSTUP_ERROR" ]]; then
+          mark_skipped "rust"
+          log "WARNING: rustup-init failed (likely due to no internet access)."
+          log "         This is expected on airgapped systems."
+          log "         Install Rust later when you have internet access."
+          debug_log "install_offline.sh:rust:network_error" "rustup-init failed due to network" "{\"status\":\"skipped\",\"error\":\"network\"}" "RUST-C" "run1"
+        else
+          mark_skipped "rust"
+          log "WARNING: rustup-init failed (expected on airgapped systems)."
+          log "         Rust is not available in the APT repo."
+          log "         Install Rust later when you have internet access."
+          debug_log "install_offline.sh:rust:failed" "rustup-init failed, Rust not available" "{\"status\":\"skipped\"}" "RUST-C" "run1"
+        fi
+        rm -f /tmp/rustup-init.log
       fi
-      rm -f /tmp/rustup-init.log
     fi
   fi
-else
-  mark_skipped "rust"
-  log "WARNING: rustup-init not found in bundle. Rust will not be installed."
-  log "You can install Rust with: sudo apt-get install -y rustc cargo"
-  debug_log "install_offline.sh:rust:missing" "rustup-init not found in bundle" "{\"status\":\"skipped\"}" "RUST-C" "run1"
-fi
+  else
+    # Try to install Rust from APT repo instead of rustup-init (offline-friendly)
+    log "rustup-init not found in bundle. Attempting to install Rust from APT repo..."
+    if sudo apt-get install -y --no-download rustc cargo 2>&1; then
+      mark_success "rust"
+      log "✓ Rust installed from APT repo"
+      debug_log "install_offline.sh:rust:apt_install_success" "Rust installed from APT repo" "{\"status\":\"success\"}" "RUST-A" "run1"
+    else
+      mark_skipped "rust"
+      log "WARNING: Rust not available in APT repo. Rust will not be installed."
+      log "You can install Rust later when you have internet access."
+      debug_log "install_offline.sh:rust:apt_install_failed" "Rust not available in APT repo" "{\"status\":\"skipped\"}" "RUST-C" "run1"
+    fi
+  fi
 
 # ============
 # 8b) Set up Rust crates (if bundled)
@@ -724,7 +947,7 @@ if [[ -d "$BUNDLE_DIR/python" ]] && [[ -n "$(ls -A "$BUNDLE_DIR/python" 2>/dev/n
       log "Installing from requirements.txt (all packages are pre-built)..."
       debug_log "install_offline.sh:python:requirements_start" "Installing from requirements.txt" "{\"requirements_file\":\"$BUNDLE_DIR/python/requirements.txt\"}" "PYTHON-A" "run1"
       
-      if $PIP_CMD install --no-index --find-links "$BUNDLE_DIR/python" -r "$BUNDLE_DIR/python/requirements.txt" 2>&1; then
+      if $PIP_CMD install --no-index --find-links "$BUNDLE_DIR/python" --break-system-packages -r "$BUNDLE_DIR/python/requirements.txt" 2>&1; then
         mark_success "python"
         log "✓ Python packages installed successfully"
         debug_log "install_offline.sh:python:success" "Python packages installed successfully" "{\"status\":\"success\"}" "PYTHON-A" "run1"
@@ -741,7 +964,7 @@ if [[ -d "$BUNDLE_DIR/python" ]] && [[ -n "$(ls -A "$BUNDLE_DIR/python" 2>/dev/n
       log "Note: Only wheels will be installed (source distributions should have been built during bundle creation)."
       debug_log "install_offline.sh:python:wheels_start" "Installing all wheels" "{\"bundle_dir\":\"$BUNDLE_DIR/python\"}" "PYTHON-A" "run1"
       
-      if $PIP_CMD install --no-index --find-links "$BUNDLE_DIR/python" \
+      if $PIP_CMD install --no-index --find-links "$BUNDLE_DIR/python" --break-system-packages \
         $(find "$BUNDLE_DIR/python" -maxdepth 1 -name "*.whl" -type f -exec basename {} \;) \
         2>&1; then
         mark_success "python"
@@ -764,6 +987,28 @@ else
   mark_skipped "python"
   log "No Python packages found in bundle. Skipping Python package installation."
   debug_log "install_offline.sh:python:no_packages" "No Python packages in bundle" "{\"status\":\"skipped\"}" "PYTHON-C" "run1"
+fi
+
+# ============
+# Restore APT sources (cleanup)
+# ============
+if [[ -n "$APT_SOURCES_BACKUP" ]] && [[ -d "$APT_SOURCES_BACKUP" ]]; then
+  log "Restoring original APT sources..."
+  for backup_file in "$APT_SOURCES_BACKUP"/*.list; do
+    if [[ -f "$backup_file" ]]; then
+      original_file="/etc/apt/sources.list.d/$(basename "$backup_file")"
+      if [[ -f "$original_file" ]]; then
+        sudo mv "$original_file.bak" "$original_file" 2>/dev/null || sudo cp "$backup_file" "$original_file" 2>/dev/null || true
+      fi
+    fi
+  done
+  # Also restore /etc/apt/sources.list if it was modified
+  if [[ -f "/etc/apt/sources.list.bak" ]]; then
+    sudo mv /etc/apt/sources.list.bak /etc/apt/sources.list 2>/dev/null || true
+  fi
+  sudo rm -rf "$APT_SOURCES_BACKUP" 2>/dev/null || true
+  log "✓ APT sources restored"
+  debug_log "install_offline.sh:apt_repo:sources_restored" "APT sources restored" "{\"status\":\"success\"}" "APT-A" "run1"
 fi
 
 # ============
