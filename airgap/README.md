@@ -508,7 +508,7 @@ sshfs \
 
 # example
 sshfs \
-  richtobey@192.168.68.88:/Volumes/T7 \
+  richtobey@192.168.68.120:/Volumes/T7 \
   /mnt/t7 \
   -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
 

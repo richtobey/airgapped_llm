@@ -40,8 +40,6 @@ if [[ -f "$BUNDLE_OS_RELEASE" ]] && [[ -f /etc/os-release ]]; then
     fi
   fi
 fi
-fi
-fi
 
 # ============
 # Command-line argument parsing
@@ -540,7 +538,6 @@ else
     log "All artifact files found (verification skipped)."
   fi
 fi
-fi
 
 # ============
 # 1) Install offline APT repo (Lua 5.3 and prereqs)
@@ -714,7 +711,6 @@ EOF
     mark_failed "apt_repo"
     debug_log "install_offline.sh:apt_repo:install_failed" "APT package installation had issues" "{\"status\":\"failed\",\"exit_code\":$APT_INSTALL_EXIT}" "APT-B" "run1"
   fi
-fi
 fi
 
 # ============

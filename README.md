@@ -274,7 +274,7 @@ If `Cargo.toml` is provided, all Rust dependencies are **vendored** during bundl
 export BUNDLE_DIR="/path/to/bundle"
 
 # Models to bundle (space-separated)
-export OLLAMA_MODELS="mistral:7b-instruct mixtral:8x7b mistral:7b-instruct-q4_K_M"
+export OLLAMA_MODELS="mistral:7b mistral:7b-instruct mixtral:8x7b mistral:7b-instruct-q4_K_M"
 
 # Or single model (backward compatible)
 export OLLAMA_MODEL="mistral:7b-instruct"
