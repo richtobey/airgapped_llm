@@ -658,8 +658,24 @@ EOF
     # Configure APT to only use amd64 architecture (x86_64) - disable multiarch/i386 requirements
     # This prevents APT from trying to install i386 packages that aren't in the bundle
     sudo mkdir -p /etc/apt/apt.conf.d/ 2>/dev/null || true
-    echo 'APT::Architectures "amd64";' | sudo tee /etc/apt/apt.conf.d/99airgap-amd64-only >/dev/null
-    echo 'APT::Architecture "amd64";' | sudo tee -a /etc/apt/apt.conf.d/99airgap-amd64-only >/dev/null
+    cat <<'APT_CONFIG_EOF' | sudo tee /etc/apt/apt.conf.d/99airgap-amd64-only >/dev/null
+APT::Architectures "amd64";
+APT::Architecture "amd64";
+APT::Default-Release "stable";
+Acquire::Languages "none";
+APT::Get::Allow-Change-Held-Packages "true";
+APT::Get::Allow-Downgrades "true";
+APT::Get::Assume-Yes "true";
+APT::Install-Recommends "false";
+APT::Install-Suggests "false";
+APT_CONFIG_EOF
+    # Check if i386 architecture is configured and save state for restoration
+    I386_WAS_ENABLED=false
+    if dpkg --print-foreign-architectures 2>/dev/null | grep -q "^i386$"; then
+      I386_WAS_ENABLED=true
+      # Temporarily disable i386 to prevent APT from trying to install i386 packages
+      sudo dpkg --remove-architecture i386 2>/dev/null || true
+    fi
     debug_log "install_offline.sh:apt_repo:sources_configured" "APT sources list configured" "{\"status\":\"success\"}" "APT-A" "run1"
   else
     log "WARNING: Failed to configure APT sources list"
@@ -735,11 +751,14 @@ EOF
   # This includes build tools, Python dev tools, and system libraries for Python packages
   # Use --no-download to prevent network access (all dependencies should be in the bundle)
   # Explicitly limit to amd64 (x86_64) architecture only - no i386 packages
+  # Use --no-install-recommends to avoid installing optional packages like pop-server
   APT_INSTALL_OUTPUT_FILE="/tmp/apt-install-output-$$.log"
   APT_INSTALL_EXIT=0
-  if sudo apt-get install -y --no-download \
+  if sudo apt-get install -y --no-download --no-install-recommends \
     -o APT::Architectures="amd64" \
     -o APT::Architecture="amd64" \
+    -o APT::Get::Allow-Change-Held-Packages=true \
+    -o APT::Get::Allow-Downgrades=true \
     lua5.3 \
     git \
     git-lfs \
@@ -1543,6 +1562,12 @@ fi
 if [[ -f /etc/apt/apt.conf.d/99airgap-amd64-only ]]; then
   sudo rm -f /etc/apt/apt.conf.d/99airgap-amd64-only 2>/dev/null || true
   log "✓ APT architecture config restored"
+fi
+
+# Restore i386 architecture if it was enabled before
+if [[ "${I386_WAS_ENABLED:-false}" == "true" ]]; then
+  sudo dpkg --add-architecture i386 2>/dev/null || true
+  log "✓ i386 architecture restored"
 fi
 
 # ============
