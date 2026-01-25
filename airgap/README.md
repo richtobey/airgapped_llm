@@ -32,15 +32,65 @@ Creates the airgap bundle containing:
 **Usage:**
 
 ```bash
-# to limit models downloaded
-export OLLAMA_MODELS="mistral:7b"
+# Setup passwordless sudo (required for APT repo build)
 cd airgap
-./get_bundle.sh
+./setup_passwordless_sudo.sh
+
+# Optional: limit models downloaded to save space
+export OLLAMA_MODELS="mistral:7b"
+
+# Create the bundle
+./get_bundle.sh --require-passwordless-sudo # --skip-verification
 ```
 
 **Options:**
 
 - `--skip-verification` - Skip SHA256 verification of downloads. If files already exist, accept them without verification. Useful when re-running the script and you trust existing downloads.
+- `--require-passwordless-sudo` - Fail fast if passwordless sudo is not available. This does not modify sudoers; it only checks and exits with instructions.
+
+**Setting Up Passwordless Sudo:**
+
+The `get_bundle.sh` script requires sudo access to build the APT repository. If you use `--require-passwordless-sudo`, you need to configure passwordless sudo first.
+
+**Recommended: Use the setup script** (safest method):
+
+```bash
+cd airgap
+./setup_passwordless_sudo.sh
+```
+
+The script will:
+- Detect your username automatically
+- Check if passwordless sudo is already configured
+- Safely add the appropriate rule to `/etc/sudoers` using `visudo` validation
+- Verify the configuration works
+
+**Manual setup** (if you prefer to do it yourself):
+
+1. **Open sudoers file for editing**:
+   ```bash
+   sudo visudo
+   ```
+
+2. **Add your user to sudoers** (replace `admin` with your username):
+   ```bash
+   admin ALL=(ALL) NOPASSWD: ALL
+   ```
+   
+   Or, if your user is in the `sudo` group, you can add:
+   ```bash
+   %sudo ALL=(ALL) NOPASSWD: ALL
+   ```
+
+3. **Save and exit** (in `visudo`, press `Ctrl+X`, then `Y`, then `Enter`)
+
+4. **Verify it works**:
+   ```bash
+   sudo -n true
+   ```
+   This should succeed without prompting for a password.
+
+**Security Note**: Passwordless sudo is convenient but reduces security. Only use this on systems where you trust all users with sudo access, or on isolated VMs/development machines.
 
 **Environment Variables:**
 
@@ -50,6 +100,7 @@ cd airgap
 - `PYTHON_REQUIREMENTS` - Path to requirements.txt (default: `requirements.txt` in same directory)
 - `RUST_CARGO_TOML` - Path to Cargo.toml (optional)
 - `SKIP_VERIFICATION` - Set to `true` to skip verification (same as `--skip-verification` flag)
+- `REQUIRE_PASSWORDLESS_SUDO` - Set to `true` to require passwordless sudo (same as `--require-passwordless-sudo`)
 
 ### `install_offline.sh`
 
@@ -91,7 +142,8 @@ Installs the following components:
 **Usage:**
 
 ```bash
-cd /path/to/airgap_llm
+# setup passwordless sudo
+cd /path/to/airgap_llm # --skip-verification --allow-network
 ./install_offline.sh
 ```
 
@@ -508,7 +560,7 @@ sshfs \
 
 # example
 sshfs \
-  richtobey@192.168.68.120:/Volumes/T7 \
+  richtobey@192.168.68.88:/Volumes/T7 \
   /mnt/t7 \
   -o uid=$(id -u),gid=$(id -g),reconnect,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3
 

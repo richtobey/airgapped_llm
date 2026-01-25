@@ -1,0 +1,75 @@
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"SUDO-H1","location":"get_bundle.sh:sudo_check:start","message":"Checking for passwordless sudo","data":{"user":"admin","sudo_exists":true}},"timestamp":1769358376000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"SUDO-H1","location":"get_bundle.sh:sudo_check:ok","message":"Passwordless sudo available","data":{"user":"admin"}},"timestamp":1769358377000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-A","location":"get_bundle.sh:extract_ollama:entry","message":"Starting Ollama extraction","data":{"archive":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/ollama/ollama-linux-amd64.tar.zst","dest":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/ollama/_tmp_ollama","archive_exists":true,"archive_size":1773259361,"dest_fs":"fuseblk"}},"timestamp":1769358379000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-B","location":"get_bundle.sh:extract_ollama:exit","message":"Ollama extraction finished","data":{"tar_exit":2,"binary_found":true}},"timestamp":1769358843000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-A","location":"get_bundle.sh:extract_ollama:tar_result","message":"Tar extraction completed","data":{"exit_code":0,"binary_found":true}},"timestamp":1769358843000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-B","location":"get_bundle.sh:extract_ollama:find_binary","message":"Binary search result","data":{"ollama_bin":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/ollama/_tmp_ollama/bin/ollama","exists":true,"is_executable":true}},"timestamp":1769358843000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-C","location":"get_bundle.sh:extract_ollama:path_set","message":"PATH updated","data":{"ollama_bin_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/ollama/_tmp_ollama/bin","command_exists":true,"binary_exists":true,"binary_executable":true}},"timestamp":1769358844000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"RUST-CFG","location":"get_bundle.sh:rust_crates:config","message":"Resolved Cargo.toml path","data":{"cargo_toml":"/mnt/t7/airgapped_llm/airgap/Cargo.toml","exists":true,"pwd":"/mnt/t7/airgapped_llm/airgap"}},"timestamp":1769362713000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"RUST-A","location":"get_bundle.sh:rust_crates:prep","message":"Prepared crate directory for vendor","data":{"crates_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/rust/crates","manifest_exists":true,"main_exists":false,"lib_exists":true,"toml_copied":true}},"timestamp":1769362714000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"RUST-B","location":"get_bundle.sh:rust_crates:lockfile","message":"Cargo.lock status before vendor","data":{"lock_exists":true}},"timestamp":1769362718000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"PYTHON-B","location":"get_bundle.sh:python_packages:cleanup","message":"Removed existing site-packages directory","data":{"outdir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/python/site-packages"}},"timestamp":1769363468000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H1","location":"install_offline.sh:apt_repo:check_start","message":"Checking APT repo files","data":{"repo_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo","packages_gz_exists":true,"packages_exists":true,"pool_exists":true}},"timestamp":1769364085000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H1","location":"install_offline.sh:apt_repo:configure","message":"APT repo configuration starting","data":{"repo_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo"}},"timestamp":1769364085000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H4","location":"install_offline.sh:apt_repo:sources_after","message":"APT sources after configuration","data":{"sources":"deb [trusted=yes arch=amd64] file:/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo stable main","local_repo_configured":true}},"timestamp":1769364103000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H1","location":"install_offline.sh:apt_repo:install_pre","message":"Before apt-get install","data":{"repo_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo","pool_deb_count":172,"packages_gz_exists":true,"packages_exists":true}},"timestamp":1769364103000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H2","location":"install_offline.sh:apt_repo:install_failed_detail","message":"APT install failed with details","data":{"exit_code":100,"error_tail":"manpages-dev is already the newest version (5.10-1ubuntu1).
+manpages-dev set to manually installed.
+pkg-config is already the newest version (0.29.2-1ubuntu3).
+pkg-config set to manually installed.
+zstd is already the newest version (1.4.8+dfsg-3build1).
+zstd set to manually installed.
+file is already the newest version (1:5.41-3ubuntu0.1).
+file set to manually installed.
+less is already the newest version (590-1ubuntu0.22.04.3).
+python3-setuptools is already the newest version (59.6.0-1.2ubuntu0.22.04.3).
+python3-setuptools set to manually installed.
+zlib1g-dev is already the newest version (1:1.2.11.dfsg-2ubuntu9.2).
+zlib1g-dev set to manually installed.
+python3-pip is already the newest version (22.0.2+dfsg-1ubuntu0.7).
+python3 is already the newest version (3.10.6-1~22.04.1).
+python3-dev is already the newest version (3.10.6-1~22.04.1).
+python3-dev set to manually installed.
+unzip is already the newest version (6.0-26ubuntu3.2).
+unzip set to manually installed.
+The following additi","will_install_section":"The following additional packages will be installed:
+  bzip2-doc cmake-data cpp-11 cpp-12 curl dh-elpa-helper g++-11 gcc-11
+  gcc-11-base gcc-12 gcc-12-base gcc-12-base:i386 gfortran-11 hdf5-helpers
+  libaacs0 libaec-dev libaec0 libasan6 libasan8 libatlas3-base libatomic1
+  libavformat58 libavutil-dev libbdplus0 libblas3 libbluray2 libbrotli-dev
+  libcc1-0 libchromaprint1 libcrypto++8 libcurl4 libcurl4-openssl-dev
+  libdeflate-dev libflac-dev libfreetype-dev libfreetype6 libgcc-11-dev
+  libgcc-1"}},"timestamp":1769364111000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H3","location":"install_offline.sh:apt_repo:missing_packages","message":"Missing packages identified","data":{"missing_packages":"","packages_in_pool":172,"packages_in_index":169,"apt_output_file":"/tmp/apt-install-output-51968.log"}},"timestamp":1769364111000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H5","location":"install_offline.sh:apt_repo:install_result","message":"APT install result analysis","data":{"exit_code":100,"packages_installed":0,"has_installed":false,"has_fetch_error":true,"has_unmet_deps":false}},"timestamp":1769364111000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-SVC-H1","location":"install_offline.sh:ollama:systemd:start","message":"Starting Ollama systemd setup","data":{"install_path":"/usr/local/bin/ollama","systemctl_exists":true}},"timestamp":1769364386000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"OLLAMA-SVC-H2","location":"install_offline.sh:ollama:systemd:enabled","message":"Ollama systemd unit enabled","data":{"user":"admin","home":"/home/admin"}},"timestamp":1769364393000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H1","location":"install_offline.sh:apt_repo:check_start","message":"Checking APT repo files","data":{"repo_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo","packages_gz_exists":true,"packages_exists":true,"pool_exists":true}},"timestamp":1769365183000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H1","location":"install_offline.sh:apt_repo:configure","message":"APT repo configuration starting","data":{"repo_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo"}},"timestamp":1769365183000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H4","location":"install_offline.sh:apt_repo:sources_after","message":"APT sources after configuration","data":{"sources":"deb [trusted=yes arch=amd64] file:/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo stable main","local_repo_configured":true}},"timestamp":1769365197000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H1","location":"install_offline.sh:apt_repo:install_pre","message":"Before apt-get install","data":{"repo_dir":"/mnt/t7/airgapped_llm/airgap/airgap_bundle/aptrepo","pool_deb_count":172,"packages_gz_exists":true,"packages_exists":true}},"timestamp":1769365198000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H2","location":"install_offline.sh:apt_repo:install_failed_detail","message":"APT install failed with details","data":{"exit_code":100,"error_tail":"Reading package lists...
+Building dependency tree...
+Reading state information...
+build-essential is already the newest version (12.9ubuntu3).
+build-essential set to manually installed.
+g++ is already the newest version (4:11.2.0-1ubuntu1).
+g++ set to manually installed.
+gcc is already the newest version (4:11.2.0-1ubuntu1).
+gcc set to manually installed.
+libffi-dev is already the newest version (3.4.2-4).
+libffi-dev set to manually installed.
+make is already the newest version (4.3-4.1build1).
+make set to manually installed.
+man-db is already the newest version (2.10.2-1).
+man-db set to manually installed.
+manpages-dev is already the newest version (5.10-1ubuntu1).
+manpages-dev set to manually installed.
+pkg-config is already the newest version (0.29.2-1ubuntu3).
+pkg-config set to manually installed.
+zstd is already the newest version (1.4.8+dfsg-3build1).
+zstd set to manually installed.
+file is already the newest version (1:5.41-3ubuntu0.1).
+file set to manually installed.
+less is al","will_install_section":""}},"timestamp":1769365201000}
+{"sessionId":"debug-session","runId":"run1","hypothesisId":"APT-H3","location":"install_offline.sh:apt_repo:missing_packages","message":"Missing packages identified","data":{"missing_packages":"","packages_in_pool":172,"packages_in_index":169,"apt_output_file":"/tmp/apt-install-output-53578.log"}},"timestamp":1769365201000}

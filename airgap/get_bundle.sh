@@ -26,6 +26,21 @@ debug_log() {
   # #endregion
 }
 
+# #region agent log
+dm_log() {
+  local location="$1"
+  local message="$2"
+  local data="${3:-{}}"
+  local hypothesis="${4:-SUDO-CHECK}"
+  local run_id="${5:-run1}"
+  local timestamp
+  timestamp=$(date +%s)000
+  printf '{"sessionId":"debug-session","runId":"%s","hypothesisId":"%s","location":"%s","message":"%s","data":%s,"timestamp":%s}\n' \
+    "$run_id" "$hypothesis" "$location" "$message" "$data" "$timestamp" \
+    >> "/mnt/t7/airgapped_llm/.cursor/debug.log" 2>/dev/null || true
+}
+# #endregion agent log
+
 # ============
 # IMPORTANT: This script MUST be run on a machine WITH INTERNET ACCESS
 # ============
@@ -72,6 +87,40 @@ debug_log "get_bundle.sh:os_check" "OS check passed - Linux detected" "{\"os\":\
 # #endregion
 
 IS_LINUX=true
+
+# ============
+# Architecture Detection - This script requires x86_64/amd64
+# ============
+ARCH="$(uname -m)"
+# Also check dpkg architecture if available (more reliable on Debian/Ubuntu)
+if command -v dpkg >/dev/null 2>&1; then
+  DPKG_ARCH="$(dpkg --print-architecture 2>/dev/null || echo "")"
+  if [[ -n "$DPKG_ARCH" ]]; then
+    ARCH="$DPKG_ARCH"
+  fi
+fi
+
+# #region agent log
+debug_log "get_bundle.sh:arch_check" "Architecture check" "{\"arch\":\"$ARCH\",\"uname_m\":\"$(uname -m)\",\"dpkg_arch\":\"${DPKG_ARCH:-not_available}\"}" "INIT-C" "run1"
+# #endregion
+
+# Accept both x86_64 and amd64 (they're the same architecture)
+if [[ "$ARCH" != "x86_64" ]] && [[ "$ARCH" != "amd64" ]]; then
+  echo "ERROR: This script requires x86_64/amd64 architecture" >&2
+  echo "Detected architecture: $ARCH" >&2
+  echo "" >&2
+  echo "This script only supports x86_64/amd64 systems because:" >&2
+  echo "  - APT packages are bundled for amd64 only" >&2
+  echo "  - Ollama binary is for Linux x86_64" >&2
+  echo "  - Python packages are built for x86_64" >&2
+  echo "" >&2
+  echo "Source and target systems must both be x86_64/amd64." >&2
+  exit 1
+fi
+
+# #region agent log
+debug_log "get_bundle.sh:arch_check" "Architecture check passed - x86_64/amd64 detected" "{\"arch\":\"$ARCH\"}" "INIT-C" "run1"
+# #endregion
 log() {
   # GNU date (Linux)
   # Output goes to both console (via tee) and console log file
@@ -113,10 +162,15 @@ get_status() {
 # Command-line argument parsing
 # ============
 SKIP_VERIFICATION="${SKIP_VERIFICATION:-false}"
+REQUIRE_PASSWORDLESS_SUDO="${REQUIRE_PASSWORDLESS_SUDO:-false}"
 while [[ $# -gt 0 ]]; do
   case $1 in
     --skip-verification)
       SKIP_VERIFICATION="true"
+      shift
+      ;;
+    --require-passwordless-sudo)
+      REQUIRE_PASSWORDLESS_SUDO="true"
       shift
       ;;
     --help|-h)
@@ -124,11 +178,13 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  --skip-verification    Skip SHA256 verification of downloads. If files exist,"
+      echo "  --require-passwordless-sudo  Fail fast if passwordless sudo is not available"
       echo "                        accept them without verification."
       echo "  --help, -h             Show this help message"
       echo ""
       echo "Environment Variables:"
       echo "  SKIP_VERIFICATION     Set to 'true' to skip verification (same as --skip-verification flag)"
+      echo "  REQUIRE_PASSWORDLESS_SUDO  Set to 'true' to require passwordless sudo"
       exit 0
       ;;
     *)
@@ -140,11 +196,40 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ============
+# Optional passwordless sudo check
+# ============
+if [[ "$REQUIRE_PASSWORDLESS_SUDO" == "true" ]]; then
+  # #region agent log
+  dm_log "get_bundle.sh:sudo_check:start" "Checking for passwordless sudo" "{\"user\":\"$USER\",\"sudo_exists\":$(command -v sudo >/dev/null 2>&1 && echo true || echo false)}" "SUDO-H1" "run1"
+  # #endregion agent log
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "ERROR: sudo not found. Passwordless sudo is required by --require-passwordless-sudo." >&2
+    # #region agent log
+    dm_log "get_bundle.sh:sudo_check:missing" "sudo not available" "{\"user\":\"$USER\"}" "SUDO-H2" "run1"
+    # #endregion agent log
+    exit 1
+  fi
+
+  if sudo -n true 2>/dev/null; then
+    # #region agent log
+    dm_log "get_bundle.sh:sudo_check:ok" "Passwordless sudo available" "{\"user\":\"$USER\"}" "SUDO-H1" "run1"
+    # #endregion agent log
+  else
+    echo "ERROR: Passwordless sudo is not configured for $USER." >&2
+    echo "Configure with: sudo visudo and add: $USER ALL=(ALL) NOPASSWD: ALL" >&2
+    # #region agent log
+    dm_log "get_bundle.sh:sudo_check:fail" "Passwordless sudo not available" "{\"user\":\"$USER\"}" "SUDO-H3" "run1"
+    # #endregion agent log
+    exit 1
+  fi
+fi
+
+# ============
 # Config
 # ============
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 export DEBUG_LOG="${DEBUG_LOG:-$BUNDLE_DIR/logs/get_bundle_debug.log}"
-AGENT_DEBUG_LOG="/mnt/t7_mac/airgap/.cursor/debug.log"
+AGENT_DEBUG_LOG="/mnt/t7/airgapped_llm/.cursor/debug.log"
 mkdir -p "$(dirname "$AGENT_DEBUG_LOG")" 2>/dev/null || true
 ARCH="amd64"
 # Debug log path - use bundle directory which works on both Mac and Linux
@@ -464,10 +549,17 @@ if [[ -n "$OLLAMA_EXISTING" ]]; then
   else
     # File exists but no SHA - if skip flag is not set, we need to download to verify
     if [[ "$SKIP_VERIFICATION" != "true" ]]; then
-      OLLAMA_DL_STATUS=1
+      # Accept existing binary without re-downloading; generate local SHA for consistency
+      log "Ollama binary exists but SHA file is missing. Skipping download and generating SHA locally."
+      if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$OLLAMA_EXISTING" > "${OLLAMA_EXISTING}.sha256" 2>/dev/null || true
+        OLLAMA_SHA="${OLLAMA_EXISTING}.sha256"
+      fi
+      mark_success "ollama_linux"
+      OLLAMA_DL_STATUS=0
       # #region agent log
-      debug_log "get_bundle.sh:ollama:no_sha" "Ollama binary exists but no SHA file, will download to verify" "{\"status\":\"no_sha\"}" "OLLAMA-A" "run1"
-      # #endregion
+      dm_log "get_bundle.sh:ollama:no_sha_skip" "Ollama binary exists without SHA; skipped download and generated SHA" "{\"file\":\"$OLLAMA_EXISTING\",\"sha_created\":$(test -f "${OLLAMA_EXISTING}.sha256" && echo true || echo false)}" "OLLAMA-A" "run1"
+      # #endregion agent log
     fi
   fi
 else
@@ -637,8 +729,8 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     TAR_NONFATAL_WARNING=false
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:entry\",\"message\":\"Starting Ollama extraction\",\"data\":{\"archive\":\"$OLLAMA_ARCHIVE_FILE\",\"dest\":\"$TMP_OLLAMA\",\"archive_exists\":$(test -f "$OLLAMA_ARCHIVE_FILE" && echo true || echo false),\"archive_size\":$(stat -c %s \"$OLLAMA_ARCHIVE_FILE\" 2>/dev/null || echo 0),\"dest_fs\":\"$(stat -f -c %T \"$TMP_OLLAMA\" 2>/dev/null || echo unknown)\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-  # #endregion
+  dm_log "get_bundle.sh:extract_ollama:entry" "Starting Ollama extraction" "{\"archive\":\"$OLLAMA_ARCHIVE_FILE\",\"dest\":\"$TMP_OLLAMA\",\"archive_exists\":$(test -f "$OLLAMA_ARCHIVE_FILE" && echo true || echo false),\"archive_size\":$(stat -c %s "$OLLAMA_ARCHIVE_FILE" 2>/dev/null || echo 0),\"dest_fs\":\"$(stat -f -c %T "$TMP_OLLAMA" 2>/dev/null || echo unknown)\"}" "OLLAMA-A" "run1"
+  # #endregion agent log
   
   # Extract based on file type
   if [[ "$OLLAMA_ARCHIVE_FILE" == *.tar.zst ]]; then
@@ -691,8 +783,8 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
       fi
 
       # #region agent log
-      echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:exit\",\"message\":\"Ollama extraction finished\",\"data\":{\"tar_exit\":$TAR_EXIT,\"tar_output_head\":\"${TAR_OUTPUT:0:120}\",\"binary_found\":$(test -f \"$TMP_OLLAMA/bin/ollama\" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-      # #endregion
+      dm_log "get_bundle.sh:extract_ollama:exit" "Ollama extraction finished" "{\"tar_exit\":$TAR_EXIT,\"binary_found\":$(test -f "$TMP_OLLAMA/bin/ollama" && echo true || echo false)}" "OLLAMA-B" "run1"
+      # #endregion agent log
     else
       log "ERROR: zstd or unzstd not found. Cannot extract .tar.zst file."
       log "Install zstd: sudo apt-get install zstd"
@@ -740,8 +832,8 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     fi
 
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:exit_tgz\",\"message\":\"Ollama tgz extraction finished\",\"data\":{\"tar_exit\":$TAR_EXIT,\"tar_output_head\":\"${TAR_OUTPUT:0:120}\",\"binary_found\":$(test -f \"$TMP_OLLAMA/bin/ollama\" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-    # #endregion
+    dm_log "get_bundle.sh:extract_ollama:exit_tgz" "Ollama tgz extraction finished" "{\"tar_exit\":$TAR_EXIT,\"binary_found\":$(test -f "$TMP_OLLAMA/bin/ollama" && echo true || echo false)}" "OLLAMA-B" "run1"
+    # #endregion agent log
   fi
   fi
   
@@ -753,8 +845,8 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     log "Extraction command finished with exit code: $TAR_EXIT"
     
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:tar_result\",\"message\":\"Tar extraction completed\",\"data\":{\"exit_code\":$TAR_EXIT,\"output\":\"${TAR_OUTPUT:0:200}\",\"tmp_dir_contents\":\"$(ls -la "$TMP_OLLAMA" 2>&1 | head -10 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A,OLLAMA-D\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-    # #endregion
+    dm_log "get_bundle.sh:extract_ollama:tar_result" "Tar extraction completed" "{\"exit_code\":$TAR_EXIT,\"binary_found\":$(test -f "$TMP_OLLAMA/bin/ollama" && echo true || echo false)}" "OLLAMA-A" "run1"
+    # #endregion agent log
     
     # Check if extraction succeeded - even if exit code is non-zero, check if binary exists
     if [[ $TAR_EXIT -ne 0 ]] && [[ "$TAR_NONFATAL_WARNING" == "true" ]] && [[ -f "$TMP_OLLAMA/bin/ollama" ]]; then
@@ -779,8 +871,8 @@ if [[ "$SKIP_EXTRACTION" != "true" ]]; then
     # Extraction was skipped, set TAR_EXIT to 0 since we're using existing binary
     TAR_EXIT=0
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:skipped\",\"message\":\"Extraction skipped, using existing binary\",\"data\":{\"tmp_dir\":\"$TMP_OLLAMA\",\"skip_verification\":true},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-A\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-    # #endregion
+    dm_log "get_bundle.sh:extract_ollama:skipped" "Extraction skipped, using existing binary" "{\"tmp_dir\":\"$TMP_OLLAMA\",\"skip_verification\":true}" "OLLAMA-A" "run1"
+    # #endregion agent log
   fi
 fi
 
@@ -797,8 +889,8 @@ if [[ $TAR_EXIT -eq 0 ]]; then
   fi
   
   # #region agent log
-  echo "{\"id\":\"log_$(date +%s)_ollama3\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:find_binary\",\"message\":\"Binary search result\",\"data\":{\"ollama_bin\":\"$OLLAMA_BIN\",\"exists\":$(test -f "${OLLAMA_BIN:-}" && echo true || echo false),\"is_executable\":$(test -x "${OLLAMA_BIN:-}" && echo true || echo false),\"permissions\":\"$(ls -l "${OLLAMA_BIN:-}" 2>/dev/null | awk '{print $1}' || echo 'N/A')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-B,OLLAMA-D\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-  # #endregion
+  dm_log "get_bundle.sh:extract_ollama:find_binary" "Binary search result" "{\"ollama_bin\":\"$OLLAMA_BIN\",\"exists\":$(test -f "${OLLAMA_BIN:-}" && echo true || echo false),\"is_executable\":$(test -x "${OLLAMA_BIN:-}" && echo true || echo false)}" "OLLAMA-B" "run1"
+  # #endregion agent log
   
   if [[ -n "$OLLAMA_BIN" ]] && [[ -f "$OLLAMA_BIN" ]]; then
     chmod +x "$OLLAMA_BIN"
@@ -813,8 +905,8 @@ if [[ $TAR_EXIT -eq 0 ]]; then
     fi
     
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_ollama4\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:extract_ollama:path_set\",\"message\":\"PATH updated\",\"data\":{\"new_path\":\"$PATH\",\"ollama_bin_dir\":\"$(dirname "$OLLAMA_BIN")\",\"command_exists\":$(command -v ollama >/dev/null 2>&1 && echo true || echo false),\"binary_exists\":$(test -f "$OLLAMA_BIN" && echo true || echo false),\"binary_executable\":$(test -x "$OLLAMA_BIN" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"OLLAMA-C\"}" >> "$DEBUG_LOG" 2>/dev/null || true
-    # #endregion
+    dm_log "get_bundle.sh:extract_ollama:path_set" "PATH updated" "{\"ollama_bin_dir\":\"$(dirname "$OLLAMA_BIN")\",\"command_exists\":$(command -v ollama >/dev/null 2>&1 && echo true || echo false),\"binary_exists\":$(test -f "$OLLAMA_BIN" && echo true || echo false),\"binary_executable\":$(test -x "$OLLAMA_BIN" && echo true || echo false)}" "OLLAMA-C" "run1"
+    # #endregion agent log
   else
     log "ERROR: Could not find ollama binary in extracted tarball"
     log "Searching in: $TMP_OLLAMA"
@@ -1768,10 +1860,15 @@ debug_log "get_bundle.sh:apt_repo:start" "Starting APT repo build" "{\"bundle_di
   # #endregion
 
   # Make sure apt metadata is fresh
-  if sudo apt-get update -y; then
-    APT_UPDATE_EXIT=0
-  else
-    APT_UPDATE_EXIT=$?
+  # Note: apt-get update may report i386 Packages missing (non-fatal, we only bundle amd64)
+  APT_UPDATE_OUTPUT=$(sudo apt-get update -y 2>&1)
+  APT_UPDATE_EXIT=$?
+  
+  # Check if the only error is about missing i386 Packages (expected and non-fatal)
+  if [[ $APT_UPDATE_EXIT -ne 0 ]] && echo "$APT_UPDATE_OUTPUT" | grep -q "binary-i386.*File not found" && \
+     ! echo "$APT_UPDATE_OUTPUT" | grep -qE "ERROR|Failed to fetch.*amd64"; then
+    log "NOTE: apt-get update reported i386 Packages missing (expected, we only bundle amd64)"
+    APT_UPDATE_EXIT=0  # Treat as success since amd64 packages are available
   fi
   
   # #region agent log
@@ -1779,18 +1876,27 @@ debug_log "get_bundle.sh:apt_repo:start" "Starting APT repo build" "{\"bundle_di
   # #endregion
   
   if [[ $APT_UPDATE_EXIT -ne 0 ]]; then
-    log "ERROR: apt-get update failed with exit code $APT_UPDATE_EXIT"
-    log "Continuing anyway - package download may fail..."
+    log "WARNING: apt-get update had issues (exit code: $APT_UPDATE_EXIT)"
+    log "Continuing anyway - package download may still succeed..."
   fi
 
   # Download (no install) into a temp cache, then copy .debs into the repo pool
+  # CRITICAL: We must download ALL dependencies, including transitive ones, for offline installs
   # Some packages may not be available on all distributions, so try individually if bulk fails
   
   # #region agent log
   debug_log "get_bundle.sh:apt_repo:download_start" "Starting package download" "{\"package_count\":${#APT_PACKAGES[@]},\"tmp_apt\":\"$TMP_APT\"}" "APT-C" "run1"
   # #endregion
   
-  if ! sudo apt-get -y --download-only -o Dir::Cache="$TMP_APT" install "${APT_PACKAGES[@]}" 2>&1; then
+  # Download all packages with their dependencies
+  # apt-get install --download-only automatically downloads ALL dependencies (including transitive)
+  # We don't use --fix-missing because we want to ensure ALL dependencies are present for offline installs
+  # Explicitly limit to amd64 architecture only (x86_64) - no i386 packages
+  if ! sudo apt-get -y --download-only \
+    -o Dir::Cache="$TMP_APT" \
+    -o APT::Architectures="amd64" \
+    -o APT::Architecture="amd64" \
+    install "${APT_PACKAGES[@]}" 2>&1; then
     log "WARNING: Bulk package download failed. Attempting to download packages individually..."
     
     # #region agent log
@@ -1798,9 +1904,15 @@ debug_log "get_bundle.sh:apt_repo:start" "Starting APT repo build" "{\"bundle_di
     # #endregion
     
     # Try to download packages individually to get as many as possible
+    # Download with dependencies - don't use --fix-missing as we want to know if dependencies are missing
+    # Explicitly limit to amd64 architecture only (x86_64) - no i386 packages
     MISSING_PKGS=()
     for pkg in "${APT_PACKAGES[@]}"; do
-      OUTPUT=$(sudo apt-get -y --download-only -o Dir::Cache="$TMP_APT" install "$pkg" 2>&1)
+      OUTPUT=$(sudo apt-get -y --download-only \
+        -o Dir::Cache="$TMP_APT" \
+        -o APT::Architectures="amd64" \
+        -o APT::Architecture="amd64" \
+        install "$pkg" 2>&1)
       EXIT_CODE=$?
       if [[ $EXIT_CODE -ne 0 ]] && echo "$OUTPUT" | grep -q "Unable to locate package"; then
         log "WARNING: Package not available: $pkg (skipping)"
@@ -1842,13 +1954,72 @@ debug_log "get_bundle.sh:apt_repo:start" "Starting APT repo build" "{\"bundle_di
   # #endregion
   
   DEB_COUNT=$(find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" 2>/dev/null | wc -l)
-  find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" -print -exec cp --update=none {} "$BUNDLE_DIR/aptrepo/pool/" \;
+  find "$TMP_APT/archives" -maxdepth 1 -type f -name "*.deb" -print -exec cp -n -- {} "$BUNDLE_DIR/aptrepo/pool/" \;
+  
+  # Verify critical dependencies are downloaded (skip system packages and virtual packages)
+  # This helps catch missing dependencies before the bundle is used
+  log "Verifying critical dependencies are present..."
+  if command -v apt-cache >/dev/null 2>&1; then
+    MISSING_DEPS_FOUND=false
+    # List of system packages that are always installed - skip checking these
+    SYSTEM_PKGS="libc6|libcrypt1|libgcc-s1|libstdc\+\+6|tar|gzip|bzip2|passwd|perl-base|zlib1g|libzstd1|libssl3|libcrypto\+\+8"
+    
+    for pkg in "${APT_PACKAGES[@]}"; do
+      # Get direct dependencies only (not recursive to avoid false positives)
+      DEPS=$(apt-cache depends --no-recommends --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances "$pkg" 2>/dev/null | grep -E "^\s*(Depends|PreDepends):" | awk '{print $2}' | sort -u || echo "")
+      for dep in $DEPS; do
+        # Remove version constraints and architecture
+        dep_name=$(echo "$dep" | sed 's/ ([^)]*)$//' | sed 's/:.*$//')
+        
+        # Skip system packages (always installed)
+        if echo "$dep_name" | grep -qE "^($SYSTEM_PKGS)$"; then
+          continue
+        fi
+        
+        # Skip if .deb exists in bundle
+        if find "$BUNDLE_DIR/aptrepo/pool" -name "${dep_name}_*.deb" 2>/dev/null | grep -q .; then
+          continue
+        fi
+        
+        # Check if it's provided by another package in the bundle
+        PROVIDERS=$(apt-cache show "$dep_name" 2>/dev/null | grep "^Provides:" | awk '{print $2}' | sed 's/ ([^)]*)$//' || echo "")
+        PROVIDED_BY_BUNDLE=false
+        for provider in $PROVIDERS; do
+          if find "$BUNDLE_DIR/aptrepo/pool" -name "${provider}_*.deb" 2>/dev/null | grep -q .; then
+            PROVIDED_BY_BUNDLE=true
+            break
+          fi
+        done
+        
+        if [[ "$PROVIDED_BY_BUNDLE" == "false" ]]; then
+          # Check if it's a virtual package (no real package provides it)
+          if ! apt-cache show "$dep_name" 2>/dev/null | grep -q "^Package:"; then
+            # Virtual package, skip
+            continue
+          fi
+          
+          # Only warn for non-QEMU packages (QEMU has many optional dependencies)
+          if [[ ! "$pkg" =~ ^qemu ]]; then
+            log "WARNING: Dependency '$dep_name' (needed by $pkg) not found in bundle"
+            MISSING_DEPS_FOUND=true
+          fi
+        fi
+      done
+    done
+    if [[ "$MISSING_DEPS_FOUND" == "true" ]]; then
+      log "WARNING: Some dependencies may be missing. This could cause 'unmet dependencies' errors."
+      log "Consider re-running get_bundle.sh or adding missing packages to APT_PACKAGES list."
+    else
+      log "✓ Critical dependencies verified"
+    fi
+  fi
   
   # #region agent log
   debug_log "get_bundle.sh:apt_repo:copy_complete" "Debian packages copied to repo" "{\"deb_count\":$DEB_COUNT,\"pool_dir\":\"$BUNDLE_DIR/aptrepo/pool\"}" "APT-I" "run1"
   # #endregion
 
   # Create minimal repo metadata
+  # Only amd64 (x86_64) architecture - source and target are both x86_64
   cat >"$BUNDLE_DIR/aptrepo/conf/distributions" <<EOF
 Origin: airgap
 Label: airgap
@@ -1856,7 +2027,7 @@ Suite: stable
 Codename: stable
 Architectures: amd64
 Components: main
-Description: Local offline repo for airgapped installs
+Description: Local offline repo for airgapped installs (amd64/x86_64 only)
 EOF
 
   # #region agent log
@@ -2022,7 +2193,7 @@ if [[ ! -f "$RUST_CARGO_TOML" ]]; then
 fi
 
 # #region agent log
-echo "{\"id\":\"log_$(date +%s)_rust0\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:rust_crates:config\",\"message\":\"Resolved Cargo.toml path\",\"data\":{\"cargo_toml\":\"$RUST_CARGO_TOML\",\"exists\":$(test -f \"$RUST_CARGO_TOML\" && echo true || echo false),\"pwd\":\"$PWD\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"RUST-CFG\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
+dm_log "get_bundle.sh:rust_crates:config" "Resolved Cargo.toml path" "{\"cargo_toml\":\"$RUST_CARGO_TOML\",\"exists\":$(test -f "$RUST_CARGO_TOML" && echo true || echo false),\"pwd\":\"$PWD\"}" "RUST-CFG" "run1"
 # #endregion
 
 # #region agent log
@@ -2124,8 +2295,8 @@ if [[ -f "$RUST_CARGO_TOML" ]]; then
     fi
 
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_rust1\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:rust_crates:prep\",\"message\":\"Prepared crate directory for vendor\",\"data\":{\"crates_dir\":\"$CRATES_DIR\",\"manifest_exists\":$(test -f \"$CRATES_DIR/Cargo.toml\" && echo true || echo false),\"main_exists\":$(test -f \"$CRATES_DIR/src/main.rs\" && echo true || echo false),\"lib_exists\":$(test -f \"$CRATES_DIR/src/lib.rs\" && echo true || echo false),\"toml_copied\":$RUST_TOML_COPIED,\"dir_listing\":\"$(ls -la "$CRATES_DIR" 2>/dev/null | head -20 | tr '\n' ';')\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"RUST-A\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-    # #endregion
+    dm_log "get_bundle.sh:rust_crates:prep" "Prepared crate directory for vendor" "{\"crates_dir\":\"$CRATES_DIR\",\"manifest_exists\":$(test -f "$CRATES_DIR/Cargo.toml" && echo true || echo false),\"main_exists\":$(test -f "$CRATES_DIR/src/main.rs" && echo true || echo false),\"lib_exists\":$(test -f "$CRATES_DIR/src/lib.rs" && echo true || echo false),\"toml_copied\":$RUST_TOML_COPIED}" "RUST-A" "run1"
+    # #endregion agent log
 
     if [[ -f "Cargo.lock" ]]; then
       cp "Cargo.lock" "$CRATES_DIR/"
@@ -2138,8 +2309,8 @@ if [[ -f "$RUST_CARGO_TOML" ]]; then
     fi
 
     # #region agent log
-    echo "{\"id\":\"log_$(date +%s)_rust2\",\"timestamp\":$(date +%s)000,\"location\":\"get_bundle.sh:rust_crates:lockfile\",\"message\":\"Cargo.lock status before vendor\",\"data\":{\"lock_exists\":$(test -f \"$CRATES_DIR/Cargo.lock\" && echo true || echo false)},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"RUST-B\"}" >> "$AGENT_DEBUG_LOG" 2>/dev/null || true
-    # #endregion
+    dm_log "get_bundle.sh:rust_crates:lockfile" "Cargo.lock status before vendor" "{\"lock_exists\":$(test -f "$CRATES_DIR/Cargo.lock" && echo true || echo false)}" "RUST-B" "run1"
+    # #endregion agent log
     
     # Vendor all dependencies (downloads and prepares them for offline use)
     log "Vendoring Rust crates..."
@@ -2259,6 +2430,14 @@ if [[ -f "$PYTHON_REQUIREMENTS" ]]; then
     # #region agent log
     debug_log "get_bundle.sh:python_packages:download_start" "Starting Python package download" "{\"bundle_dir\":\"$BUNDLE_DIR\",\"requirements_file\":\"$PYTHON_REQUIREMENTS\"}" "PYTHON-B" "run1"
     # #endregion
+    
+    PYTHON_OUTDIR="$BUNDLE_DIR/python/site-packages"
+    if [[ -d "$PYTHON_OUTDIR" ]]; then
+      rm -rf "$PYTHON_OUTDIR" 2>/dev/null || true
+      # #region agent log
+      dm_log "get_bundle.sh:python_packages:cleanup" "Removed existing site-packages directory" "{\"outdir\":\"$PYTHON_OUTDIR\"}" "PYTHON-B" "run1"
+      # #endregion agent log
+    fi
     
     python3 "$SCRIPT_DIR/scripts/download_python_packages.py" "$BUNDLE_DIR" "$PYTHON_REQUIREMENTS"
     

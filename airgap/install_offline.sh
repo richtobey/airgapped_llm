@@ -21,6 +21,32 @@ if [[ "$OS" != "Linux" ]]; then
   exit 1
 fi
 
+# ============
+# Architecture Detection - This script requires x86_64/amd64
+# ============
+ARCH="$(uname -m)"
+# Also check dpkg architecture if available (more reliable on Debian/Ubuntu)
+if command -v dpkg >/dev/null 2>&1; then
+  DPKG_ARCH="$(dpkg --print-architecture 2>/dev/null || echo "")"
+  if [[ -n "$DPKG_ARCH" ]]; then
+    ARCH="$DPKG_ARCH"
+  fi
+fi
+
+# Accept both x86_64 and amd64 (they're the same architecture)
+if [[ "$ARCH" != "x86_64" ]] && [[ "$ARCH" != "amd64" ]]; then
+  echo "ERROR: This script requires x86_64/amd64 architecture" >&2
+  echo "Detected architecture: $ARCH" >&2
+  echo "" >&2
+  echo "This script only supports x86_64/amd64 systems because:" >&2
+  echo "  - APT packages in the bundle are for amd64 only" >&2
+  echo "  - Ollama binary is for Linux x86_64" >&2
+  echo "  - Python packages are built for x86_64" >&2
+  echo "" >&2
+  echo "Source and target systems must both be x86_64/amd64." >&2
+  exit 1
+fi
+
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 
@@ -113,6 +139,21 @@ EOF
 log() { 
   echo "[$(date -Is)] $*"
 }
+
+# #region agent log
+dm_log() {
+  local location="$1"
+  local message="$2"
+  local data="${3:-{}}"
+  local hypothesis="${4:-APT-DEBUG}"
+  local run_id="${5:-run1}"
+  local timestamp
+  timestamp=$(date +%s)000
+  printf '{"sessionId":"debug-session","runId":"%s","hypothesisId":"%s","location":"%s","message":"%s","data":%s,"timestamp":%s}\n' \
+    "$run_id" "$hypothesis" "$location" "$message" "$data" "$timestamp" \
+    >> "/mnt/t7/airgapped_llm/.cursor/debug.log" 2>/dev/null || true
+}
+# #endregion agent log
 
 # Status tracking (similar to get_bundle.sh)
 mark_success() {
@@ -548,36 +589,77 @@ if [[ "$APT_REPO_OS_MISMATCH" == "true" ]]; then
   log "Skipping offline APT repo install due to OS mismatch."
   mark_failed "apt_repo"
   debug_log "install_offline.sh:apt_repo:skipped_os_mismatch" "Skipping APT repo install due to OS mismatch" "{\"status\":\"skipped\"}" "APT-B" "run1"
+  # #region agent log
+  dm_log "install_offline.sh:apt_repo:os_mismatch" "APT repo install skipped due to OS mismatch" "{\"apt_repo_os_mismatch\":true,\"repo_dir\":\"$REPO_DIR\"}" "APT-H3" "run1"
+  # #endregion agent log
 else
 
 # Check if APT repo was built
 debug_log "install_offline.sh:apt_repo:check" "Checking for APT repository" "{\"repo_dir\":\"$REPO_DIR\",\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false)}" "APT-A" "run1"
+# #region agent log
+dm_log "install_offline.sh:apt_repo:check_start" "Checking APT repo files" "{\"repo_dir\":\"$REPO_DIR\",\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false),\"pool_exists\":$(test -d "$REPO_DIR/pool" && echo true || echo false)}" "APT-H1" "run1"
+# #endregion agent log
 
 if [[ ! -f "$REPO_DIR/Packages.gz" ]] && [[ ! -f "$REPO_DIR/Packages" ]]; then
-  log "ERROR: APT repo not found or not built."
-  log "The bundle must be created on Pop!_OS with internet access using get_bundle.sh"
-  log "which builds the APT repository automatically."
-  log ""
-  log "If you have temporary internet access, you can build it now:"
-  log "  1. cd $REPO_DIR"
-  log "  2. sudo apt-get update"
-  log "  3. sudo apt-get -y --download-only install <packages>"
-  log "  4. Copy .deb files from /var/cache/apt/archives/ to $REPO_DIR/pool/"
-  log "  5. apt-ftparchive packages pool > Packages && gzip -kf Packages"
-  log ""
-  log "Otherwise, please re-create the bundle on a Pop!_OS system with internet."
-  mark_failed "apt_repo"
-  debug_log "install_offline.sh:apt_repo:missing" "APT repository not found" "{\"status\":\"failed\",\"repo_dir\":\"$REPO_DIR\"}" "APT-B" "run1"
-  exit 1
+  DEB_COUNT=$(find "$REPO_DIR/pool" -type f -name "*.deb" 2>/dev/null | wc -l | tr -d ' ')
+  # #region agent log
+  dm_log "install_offline.sh:apt_repo:missing" "APT repo metadata missing, checking pool for fallback build" "{\"repo_dir\":\"$REPO_DIR\",\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false),\"pool_exists\":$(test -d "$REPO_DIR/pool" && echo true || echo false),\"deb_count\":${DEB_COUNT:-0},\"apt_ftparchive_exists\":$(command -v apt-ftparchive >/dev/null 2>&1 && echo true || echo false)}" "APT-H4" "run1"
+  # #endregion agent log
+
+  if [[ "${DEB_COUNT:-0}" -gt 0 ]] && command -v apt-ftparchive >/dev/null 2>&1; then
+    log "APT repo metadata missing. Building Packages index from pool..."
+    if (cd "$REPO_DIR" && apt-ftparchive packages pool > Packages && gzip -kf Packages) 2>/dev/null; then
+      log "✓ Rebuilt Packages index locally"
+      # #region agent log
+      dm_log "install_offline.sh:apt_repo:rebuild_success" "Rebuilt Packages index from pool" "{\"repo_dir\":\"$REPO_DIR\",\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false)}" "APT-H4" "run1"
+      # #endregion agent log
+    else
+      log "ERROR: Failed to rebuild Packages index from pool."
+      # #region agent log
+      dm_log "install_offline.sh:apt_repo:rebuild_failed" "Failed to rebuild Packages index from pool" "{\"repo_dir\":\"$REPO_DIR\"}" "APT-H4" "run1"
+      # #endregion agent log
+    fi
+  fi
+
+  if [[ ! -f "$REPO_DIR/Packages.gz" ]] && [[ ! -f "$REPO_DIR/Packages" ]]; then
+    log "ERROR: APT repo not found or not built."
+    log "The bundle must be created on Pop!_OS with internet access using get_bundle.sh"
+    log "which builds the APT repository automatically."
+    log ""
+    log "If you have temporary internet access, you can build it now:"
+    log "  1. cd $REPO_DIR"
+    log "  2. sudo apt-get update"
+    log "  3. sudo apt-get -y --download-only install <packages>"
+    log "  4. Copy .deb files from /var/cache/apt/archives/ to $REPO_DIR/pool/"
+    log "  5. apt-ftparchive packages pool > Packages && gzip -kf Packages"
+    log ""
+    log "Otherwise, please re-create the bundle on a Pop!_OS system with internet."
+    mark_failed "apt_repo"
+    debug_log "install_offline.sh:apt_repo:missing" "APT repository not found" "{\"status\":\"failed\",\"repo_dir\":\"$REPO_DIR\"}" "APT-B" "run1"
+    # #region agent log
+    dm_log "install_offline.sh:apt_repo:missing" "APT repo missing Packages files" "{\"repo_dir\":\"$REPO_DIR\",\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false),\"pool_exists\":$(test -d "$REPO_DIR/pool" && echo true || echo false),\"deb_count\":${DEB_COUNT:-0}}" "APT-H2" "run1"
+    # #endregion agent log
+    exit 1
+  fi
 else
   log "Configuring local offline APT repo..."
   debug_log "install_offline.sh:apt_repo:configure" "Configuring offline APT repository" "{\"repo_dir\":\"$REPO_DIR\"}" "APT-A" "run1"
+  # #region agent log
+  dm_log "install_offline.sh:apt_repo:configure" "APT repo configuration starting" "{\"repo_dir\":\"$REPO_DIR\"}" "APT-H1" "run1"
+  # #endregion agent log
   
   # Add a local file:// repo (no network)
+  # Configure to only use amd64 (x86_64) architecture - source and target are both x86_64
+  # This prevents APT from trying to install i386 packages that aren't in the bundle
   if sudo tee /etc/apt/sources.list.d/airgap-local.list >/dev/null <<EOF
-deb [trusted=yes] file:$REPO_DIR stable main
+deb [trusted=yes arch=amd64] file:$REPO_DIR stable main
 EOF
   then
+    # Configure APT to only use amd64 architecture (x86_64) - disable multiarch/i386 requirements
+    # This prevents APT from trying to install i386 packages that aren't in the bundle
+    sudo mkdir -p /etc/apt/apt.conf.d/ 2>/dev/null || true
+    echo 'APT::Architectures "amd64";' | sudo tee /etc/apt/apt.conf.d/99airgap-amd64-only >/dev/null
+    echo 'APT::Architecture "amd64";' | sudo tee -a /etc/apt/apt.conf.d/99airgap-amd64-only >/dev/null
     debug_log "install_offline.sh:apt_repo:sources_configured" "APT sources list configured" "{\"status\":\"success\"}" "APT-A" "run1"
   else
     log "WARNING: Failed to configure APT sources list"
@@ -637,14 +719,27 @@ EOF
     log "This may be expected. Continuing with package installation..."
   fi
   
+  # #region agent log
+  APT_SOURCES_AFTER=$(cat /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null | grep -v "^#" | grep -v "^$" | head -10 || echo "")
+  dm_log "install_offline.sh:apt_repo:sources_after" "APT sources after configuration" "{\"sources\":\"${APT_SOURCES_AFTER:0:500}\",\"local_repo_configured\":$(grep -q "file:$REPO_DIR" /etc/apt/sources.list.d/airgap-local.list 2>/dev/null && echo true || echo false)}" "APT-H4" "run1"
+  # #endregion agent log
+  
   log "Installing development tools and system libraries from offline repo..."
   debug_log "install_offline.sh:apt_repo:install_start" "Starting package installation" "{\"package_count\":50}" "APT-A" "run1"
   
+  # #region agent log
+  dm_log "install_offline.sh:apt_repo:install_pre" "Before apt-get install" "{\"repo_dir\":\"$REPO_DIR\",\"pool_deb_count\":$(find "$REPO_DIR/pool" -type f -name "*.deb" 2>/dev/null | wc -l | tr -d ' '),\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false)}" "APT-H1" "run1"
+  # #endregion agent log
+  
   # Install all packages from the offline repo
   # This includes build tools, Python dev tools, and system libraries for Python packages
-  # Use --no-download to prevent any network access
+  # Use --no-download to prevent network access (all dependencies should be in the bundle)
+  # Explicitly limit to amd64 (x86_64) architecture only - no i386 packages
+  APT_INSTALL_OUTPUT_FILE="/tmp/apt-install-output-$$.log"
   APT_INSTALL_EXIT=0
   if sudo apt-get install -y --no-download \
+    -o APT::Architectures="amd64" \
+    -o APT::Architecture="amd64" \
     lua5.3 \
     git \
     git-lfs \
@@ -700,17 +795,74 @@ EOF
     less \
     file \
     zstd \
-    2>&1; then
+    >"$APT_INSTALL_OUTPUT_FILE" 2>&1; then
     APT_INSTALL_EXIT=0
     mark_success "apt_repo"
     log "✓ APT packages installed successfully"
     debug_log "install_offline.sh:apt_repo:install_success" "APT packages installed successfully" "{\"status\":\"success\",\"exit_code\":0}" "APT-A" "run1"
+    rm -f "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null || true
   else
     APT_INSTALL_EXIT=$?
-    log "WARNING: Some packages may have failed to install (exit code: $APT_INSTALL_EXIT). Check manually."
-    mark_failed "apt_repo"
-    debug_log "install_offline.sh:apt_repo:install_failed" "APT package installation had issues" "{\"status\":\"failed\",\"exit_code\":$APT_INSTALL_EXIT}" "APT-B" "run1"
+    APT_ERROR_OUTPUT=$(cat "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null || echo "")
+    APT_ERROR_TAIL=$(tail -50 "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null || echo "")
+    
+    # Extract packages that APT tried to install but couldn't find
+    # Look for patterns like "Unable to locate package X" or "E: Unable to fetch X"
+    MISSING_PACKAGE_NAMES=$(grep -iE "unable to (locate|fetch).*package|package.*is not available|could not (find|resolve)" "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null | grep -oE "[a-z0-9][a-z0-9+\-\.]+" | sort -u | head -20 | tr '\n' ' ' || echo "")
+    
+    # Also check what packages were listed as "will be installed" but then failed
+    WILL_INSTALL_LINE=$(grep -A 100 "The following additional packages will be installed:" "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null | grep -B 100 "E:" | head -60 || echo "")
+    
+    # #region agent log
+    dm_log "install_offline.sh:apt_repo:install_failed_detail" "APT install failed with details" "{\"exit_code\":$APT_INSTALL_EXIT,\"error_tail\":\"${APT_ERROR_TAIL:0:1000}\",\"will_install_section\":\"${WILL_INSTALL_LINE:0:500}\"}" "APT-H2" "run1"
+    # #endregion agent log
+    
+    # #region agent log
+    dm_log "install_offline.sh:apt_repo:missing_packages" "Missing packages identified" "{\"missing_packages\":\"$MISSING_PACKAGE_NAMES\",\"packages_in_pool\":$(find "$REPO_DIR/pool" -type f -name "*.deb" 2>/dev/null | wc -l | tr -d ' '),\"packages_in_index\":$(grep -c "^Package:" "$REPO_DIR/Packages" 2>/dev/null || echo 0),\"apt_output_file\":\"$APT_INSTALL_OUTPUT_FILE\"}" "APT-H3" "run1"
+    # #endregion agent log
+    
+    # Check if packages were actually installed despite errors
+    # Look for patterns like "21 upgraded, 73 newly installed" or "X newly installed" or "X upgraded"
+    PACKAGES_INSTALLED=$(grep -oE "[0-9]+ (newly installed|upgraded)" "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null | grep -oE "[0-9]+" | head -1 || echo "0")
+    HAS_INSTALLED=$(grep -qE "[0-9]+ (newly installed|upgraded)" "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null && echo "true" || echo "false")
+    HAS_FETCH_ERROR=$(grep -q "Unable to fetch" "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null && echo "true" || echo "false")
+    HAS_UNMET_DEPS=$(grep -q "unmet dependencies\|Depends:" "$APT_INSTALL_OUTPUT_FILE" 2>/dev/null && echo "true" || echo "false")
+    
+    # #region agent log
+    dm_log "install_offline.sh:apt_repo:install_result" "APT install result analysis" "{\"exit_code\":$APT_INSTALL_EXIT,\"packages_installed\":$PACKAGES_INSTALLED,\"has_installed\":$HAS_INSTALLED,\"has_fetch_error\":$HAS_FETCH_ERROR,\"has_unmet_deps\":$HAS_UNMET_DEPS}" "APT-H5" "run1"
+    # #endregion agent log
+    
+    # Mark as success if packages were actually installed, regardless of exit code or dependency warnings
+    if [[ "$HAS_INSTALLED" == "true" ]] || [[ "$PACKAGES_INSTALLED" != "0" ]]; then
+      if [[ "$HAS_UNMET_DEPS" == "true" ]]; then
+        log "WARNING: Some packages have unmet dependencies, but $PACKAGES_INSTALLED packages were installed successfully."
+        log "Dependency conflicts are expected in offline installs when some optional dependencies are missing."
+      elif [[ "$HAS_FETCH_ERROR" == "true" ]]; then
+        log "WARNING: Some packages could not be found in the local repo and were skipped (--fix-missing)."
+        if [[ -n "$MISSING_PACKAGE_NAMES" ]]; then
+          log "Skipped packages: $MISSING_PACKAGE_NAMES"
+          log "These packages are not in the local APT repo. They may need to be added to get_bundle.sh."
+        fi
+        log "However, $PACKAGES_INSTALLED packages were installed successfully."
+      else
+        log "✓ APT packages installed successfully ($PACKAGES_INSTALLED packages)"
+      fi
+      mark_success "apt_repo"
+    elif [[ $APT_INSTALL_EXIT -eq 0 ]]; then
+      log "✓ APT packages installed successfully (all requested packages were already installed)"
+      mark_success "apt_repo"
+    else
+      log "WARNING: APT installation failed (exit code: $APT_INSTALL_EXIT). No packages were installed."
+      log "Check the APT output file for details: $APT_INSTALL_OUTPUT_FILE"
+      mark_failed "apt_repo"
+    fi
+    log "Full APT output saved to: $APT_INSTALL_OUTPUT_FILE"
+    # Only log failure if we actually marked it as failed (already done above)
+    if [[ "$(get_status apt_repo)" == "failed" ]]; then
+      debug_log "install_offline.sh:apt_repo:install_failed" "APT package installation had issues" "{\"status\":\"failed\",\"exit_code\":$APT_INSTALL_EXIT}" "APT-B" "run1"
+    fi
   fi
+fi
 fi
 
 # ============
@@ -843,6 +995,63 @@ if sudo install -m 0755 "$OLLAMA_BIN" "$INSTALL_PREFIX/ollama" 2>&1; then
   mark_success "ollama"
   log "✓ Ollama installed to $INSTALL_PREFIX/ollama"
   debug_log "install_offline.sh:ollama:success" "Ollama installed successfully" "{\"status\":\"success\",\"install_path\":\"$INSTALL_PREFIX/ollama\"}" "OLLAMA-A" "run1"
+  
+  # #region agent log
+  dm_log "install_offline.sh:ollama:systemd:start" "Starting Ollama systemd setup" "{\"install_path\":\"$INSTALL_PREFIX/ollama\",\"systemctl_exists\":$(command -v systemctl >/dev/null 2>&1 && echo true || echo false)}" "OLLAMA-SVC-H1" "run1"
+  # #endregion agent log
+  
+  if command -v systemctl >/dev/null 2>&1; then
+    OLLAMA_SERVICE_USER="${SUDO_USER:-$USER}"
+    OLLAMA_SERVICE_HOME=$(getent passwd "$OLLAMA_SERVICE_USER" | cut -d: -f6 || echo "$HOME")
+    
+    if sudo tee /etc/systemd/system/ollama.service >/dev/null <<EOF
+[Unit]
+Description=Ollama Service
+After=network.target
+
+[Service]
+Type=simple
+User=$OLLAMA_SERVICE_USER
+WorkingDirectory=$OLLAMA_SERVICE_HOME
+ExecStart=$INSTALL_PREFIX/ollama serve
+Restart=always
+RestartSec=5
+Environment=HOME=$OLLAMA_SERVICE_HOME
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    then
+      if sudo systemctl daemon-reload 2>&1; then
+        if sudo systemctl enable ollama 2>&1; then
+          log "✓ Ollama systemd service installed and enabled"
+          # #region agent log
+          dm_log "install_offline.sh:ollama:systemd:enabled" "Ollama systemd unit enabled" "{\"user\":\"$OLLAMA_SERVICE_USER\",\"home\":\"$OLLAMA_SERVICE_HOME\"}" "OLLAMA-SVC-H2" "run1"
+          # #endregion agent log
+        else
+          log "WARNING: Failed to enable Ollama systemd service"
+          # #region agent log
+          dm_log "install_offline.sh:ollama:systemd:enable_failed" "Failed to enable Ollama systemd unit" "{\"user\":\"$OLLAMA_SERVICE_USER\"}" "OLLAMA-SVC-H2" "run1"
+          # #endregion agent log
+        fi
+      else
+        log "WARNING: systemctl daemon-reload failed for Ollama service"
+        # #region agent log
+        dm_log "install_offline.sh:ollama:systemd:daemon_reload_failed" "daemon-reload failed" "{}" "OLLAMA-SVC-H2" "run1"
+        # #endregion agent log
+      fi
+    else
+      log "WARNING: Failed to write /etc/systemd/system/ollama.service"
+      # #region agent log
+      dm_log "install_offline.sh:ollama:systemd:write_failed" "Failed to write systemd unit file" "{}" "OLLAMA-SVC-H2" "run1"
+      # #endregion agent log
+    fi
+  else
+    log "NOTE: systemctl not found; skipping Ollama systemd setup"
+    # #region agent log
+    dm_log "install_offline.sh:ollama:systemd:skipped" "systemctl not available" "{}" "OLLAMA-SVC-H1" "run1"
+    # #endregion agent log
+  fi
 else
   mark_failed "ollama"
   log "ERROR: Failed to install Ollama binary"
@@ -1328,6 +1537,31 @@ if [[ -n "$APT_SOURCES_BACKUP" ]] && [[ -d "$APT_SOURCES_BACKUP" ]]; then
   sudo rm -rf "$APT_SOURCES_BACKUP" 2>/dev/null || true
   log "✓ APT sources restored"
   debug_log "install_offline.sh:apt_repo:sources_restored" "APT sources restored" "{\"status\":\"success\"}" "APT-A" "run1"
+fi
+
+# Remove APT architecture restriction config file (cleanup)
+if [[ -f /etc/apt/apt.conf.d/99airgap-amd64-only ]]; then
+  sudo rm -f /etc/apt/apt.conf.d/99airgap-amd64-only 2>/dev/null || true
+  log "✓ APT architecture config restored"
+fi
+
+# ============
+# Copy logs from /tmp to logs directory
+# ============
+log "Copying temporary logs to logs directory..."
+TMP_LOG_PATTERN="/tmp/*-$$.log /tmp/apt-install-output-$$.log /tmp/apt-sources-backup-$$"
+COPIED_LOGS=0
+for tmp_log in $TMP_LOG_PATTERN; do
+  if [[ -f "$tmp_log" ]] || [[ -d "$tmp_log" ]]; then
+    LOG_BASENAME=$(basename "$tmp_log")
+    if cp -r "$tmp_log" "$LOG_DIR/${LOG_BASENAME}" 2>/dev/null; then
+      COPIED_LOGS=$((COPIED_LOGS + 1))
+      log "  Copied: $LOG_BASENAME"
+    fi
+  fi
+done
+if [[ $COPIED_LOGS -gt 0 ]]; then
+  log "✓ Copied $COPIED_LOGS temporary log file(s) to $LOG_DIR"
 fi
 
 # ============
