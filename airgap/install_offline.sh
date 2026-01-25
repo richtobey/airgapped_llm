@@ -47,7 +47,21 @@ if [[ "$ARCH" != "x86_64" ]] && [[ "$ARCH" != "amd64" ]]; then
   exit 1
 fi
 
-BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
+# Determine BUNDLE_DIR - try multiple locations for robustness
+# 1. Use BUNDLE_DIR env var if set
+# 2. Check if airgap_bundle exists relative to script location
+# 3. Check if airgap_bundle exists in current directory
+# 4. Default to current directory + airgap_bundle
+if [[ -z "${BUNDLE_DIR:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  if [[ -d "$SCRIPT_DIR/airgap_bundle" ]]; then
+    BUNDLE_DIR="$SCRIPT_DIR/airgap_bundle"
+  elif [[ -d "$PWD/airgap_bundle" ]]; then
+    BUNDLE_DIR="$PWD/airgap_bundle"
+  else
+    BUNDLE_DIR="$PWD/airgap_bundle"
+  fi
+fi
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 
 METADATA_DIR="$BUNDLE_DIR/metadata"
@@ -149,9 +163,19 @@ dm_log() {
   local run_id="${5:-run1}"
   local timestamp
   timestamp=$(date +%s)000
+  # Use BUNDLE_DIR for debug log path - place it in the parent directory of bundle (workspace root)
+  # If BUNDLE_DIR ends with 'airgap_bundle', use its parent; otherwise use BUNDLE_DIR itself
+  local base_dir="${BUNDLE_DIR:-$(dirname "$0")}"
+  if [[ "$base_dir" == */airgap_bundle ]]; then
+    base_dir=$(dirname "$base_dir")
+  fi
+  local debug_log_path="$base_dir/.cursor/debug.log"
+  local debug_log_dir=$(dirname "$debug_log_path")
+  # Create directory if it doesn't exist, but don't fail if we can't
+  mkdir -p "$debug_log_dir" 2>/dev/null || true
   printf '{"sessionId":"debug-session","runId":"%s","hypothesisId":"%s","location":"%s","message":"%s","data":%s,"timestamp":%s}\n' \
     "$run_id" "$hypothesis" "$location" "$message" "$data" "$timestamp" \
-    >> "/mnt/t7/airgapped_llm/.cursor/debug.log" 2>/dev/null || true
+    >> "$debug_log_path" 2>/dev/null || true
 }
 # #endregion agent log
 
@@ -661,7 +685,6 @@ EOF
     cat <<'APT_CONFIG_EOF' | sudo tee /etc/apt/apt.conf.d/99airgap-amd64-only >/dev/null
 APT::Architectures "amd64";
 APT::Architecture "amd64";
-APT::Default-Release "stable";
 Acquire::Languages "none";
 APT::Get::Allow-Change-Held-Packages "true";
 APT::Get::Allow-Downgrades "true";
@@ -1622,6 +1645,8 @@ fi
 # Copy logs from /tmp to logs directory
 # ============
 log "Copying temporary logs to logs directory..."
+# Use the same directory as DEBUG_LOG and CONSOLE_LOG
+LOG_DIR="$(dirname "$DEBUG_LOG")"
 TMP_LOG_PATTERN="/tmp/*-$$.log /tmp/apt-install-output-$$.log /tmp/apt-sources-backup-$$"
 COPIED_LOGS=0
 for tmp_log in $TMP_LOG_PATTERN; do

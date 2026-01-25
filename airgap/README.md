@@ -566,7 +566,7 @@ sshfs \
 
 
 # unmount
-fusermount -uz /mnt/t7_mac
+fusermount -uz /mnt/t7
 ```
 
 ### (Optional) Make it persistent with systemd (recommended)
