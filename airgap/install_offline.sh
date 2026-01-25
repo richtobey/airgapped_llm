@@ -24,6 +24,25 @@ fi
 BUNDLE_DIR="${BUNDLE_DIR:-$PWD/airgap_bundle}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 
+METADATA_DIR="$BUNDLE_DIR/metadata"
+BUNDLE_OS_RELEASE="$METADATA_DIR/os-release"
+APT_REPO_OS_MISMATCH="false"
+if [[ -f "$BUNDLE_OS_RELEASE" ]] && [[ -f /etc/os-release ]]; then
+  BUNDLE_ID=$(grep '^ID=' "$BUNDLE_OS_RELEASE" | head -n 1 | cut -d= -f2 | tr -d '"')
+  BUNDLE_VERSION_ID=$(grep '^VERSION_ID=' "$BUNDLE_OS_RELEASE" | head -n 1 | cut -d= -f2 | tr -d '"')
+  SYSTEM_ID=$(grep '^ID=' /etc/os-release | head -n 1 | cut -d= -f2 | tr -d '"')
+  SYSTEM_VERSION_ID=$(grep '^VERSION_ID=' /etc/os-release | head -n 1 | cut -d= -f2 | tr -d '"')
+
+  if [[ -n "$BUNDLE_ID" ]] && [[ -n "$BUNDLE_VERSION_ID" ]] && \
+     [[ -n "$SYSTEM_ID" ]] && [[ -n "$SYSTEM_VERSION_ID" ]]; then
+    if [[ "$BUNDLE_ID" != "$SYSTEM_ID" ]] || [[ "$BUNDLE_VERSION_ID" != "$SYSTEM_VERSION_ID" ]]; then
+      APT_REPO_OS_MISMATCH="true"
+    fi
+  fi
+fi
+fi
+fi
+
 # ============
 # Command-line argument parsing
 # ============
@@ -140,6 +159,14 @@ fi
 
 # Log script start
 debug_log "install_offline.sh:start" "Installation script started" "{\"bundle_dir\":\"$BUNDLE_DIR\",\"install_prefix\":\"$INSTALL_PREFIX\",\"os\":\"$OS\",\"user\":\"$USER\",\"pid\":$$}" "INIT-A" "run1"
+
+if [[ "$APT_REPO_OS_MISMATCH" == "true" ]]; then
+  log "WARNING: Bundle was built for a different OS release than this system."
+  log "  Bundle OS: $(grep '^ID=' "$BUNDLE_OS_RELEASE" | cut -d= -f2 | tr -d '"') $(grep '^VERSION_ID=' "$BUNDLE_OS_RELEASE" | cut -d= -f2 | tr -d '"')"
+  log "  System OS: $(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"') $(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')"
+  log "Offline APT repository installs are likely to fail. Re-run get_bundle.sh on a matching OS release."
+  debug_log "install_offline.sh:apt_repo:os_mismatch" "Bundle OS release does not match system" "{\"bundle_os\":\"$(grep '^ID=' "$BUNDLE_OS_RELEASE" | cut -d= -f2 | tr -d '"')\",\"bundle_version\":\"$(grep '^VERSION_ID=' "$BUNDLE_OS_RELEASE" | cut -d= -f2 | tr -d '"')\",\"system_os\":\"$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')\",\"system_version\":\"$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')\"}" "APT-B" "run1"
+fi
 
 # ============
 # Network connectivity check - airgapped systems should have no network
@@ -513,11 +540,18 @@ else
     log "All artifact files found (verification skipped)."
   fi
 fi
+fi
 
 # ============
 # 1) Install offline APT repo (Lua 5.3 and prereqs)
 # ============
 REPO_DIR="$BUNDLE_DIR/aptrepo"
+
+if [[ "$APT_REPO_OS_MISMATCH" == "true" ]]; then
+  log "Skipping offline APT repo install due to OS mismatch."
+  mark_failed "apt_repo"
+  debug_log "install_offline.sh:apt_repo:skipped_os_mismatch" "Skipping APT repo install due to OS mismatch" "{\"status\":\"skipped\"}" "APT-B" "run1"
+else
 
 # Check if APT repo was built
 debug_log "install_offline.sh:apt_repo:check" "Checking for APT repository" "{\"repo_dir\":\"$REPO_DIR\",\"packages_gz_exists\":$(test -f "$REPO_DIR/Packages.gz" && echo true || echo false),\"packages_exists\":$(test -f "$REPO_DIR/Packages" && echo true || echo false)}" "APT-A" "run1"
@@ -569,8 +603,12 @@ EOF
     if [[ -f "$source_file" ]] && [[ "$source_file" != "/etc/apt/sources.list.d/airgap-local.list" ]]; then
       sudo cp "$source_file" "$APT_SOURCES_BACKUP/$(basename "$source_file")" 2>/dev/null || true
       # Count how many lines will be disabled
-      REMOTE_LINES=$(grep -E "^deb (http|https|ftp)" "$source_file" 2>/dev/null | wc -l || echo "0")
-      if [[ $REMOTE_LINES -gt 0 ]]; then
+      REMOTE_LINES=$(grep -E -c "^[[:space:]]*deb (http|https|ftp)" "$source_file" 2>/dev/null || true)
+      REMOTE_LINES="${REMOTE_LINES//[^0-9]/}"
+      if [[ -z "$REMOTE_LINES" ]]; then
+        REMOTE_LINES=0
+      fi
+      if (( REMOTE_LINES > 0 )); then
         ((DISABLED_COUNT += REMOTE_LINES))
       fi
       # Comment out all non-file:// sources using robust regex
@@ -676,6 +714,7 @@ EOF
     mark_failed "apt_repo"
     debug_log "install_offline.sh:apt_repo:install_failed" "APT package installation had issues" "{\"status\":\"failed\",\"exit_code\":$APT_INSTALL_EXIT}" "APT-B" "run1"
   fi
+fi
 fi
 
 # ============

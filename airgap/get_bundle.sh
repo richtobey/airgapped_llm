@@ -154,6 +154,13 @@ CONSOLE_LOG="${CONSOLE_LOG:-$BUNDLE_DIR/logs/get_bundle_console.log}"
 # Ensure log directories exist
 mkdir -p "$(dirname "$DEBUG_LOG")" "$(dirname "$CONSOLE_LOG")" 2>/dev/null || true
 
+METADATA_DIR="$BUNDLE_DIR/metadata"
+mkdir -p "$METADATA_DIR" 2>/dev/null || true
+if [[ -f /etc/os-release ]]; then
+  cp /etc/os-release "$METADATA_DIR/os-release" 2>/dev/null || true
+  debug_log "get_bundle.sh:metadata:os_release" "Saved os-release metadata" "{\"metadata_dir\":\"$METADATA_DIR\"}" "INIT-C" "run1"
+fi
+
 # Store script start directory for cleanup operations
 # We'll change to BUNDLE_DIR when running commands that might create files
 SCRIPT_START_DIR="$PWD"

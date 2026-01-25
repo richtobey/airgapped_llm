@@ -11,4 +11,6 @@ logs/
 .DS_Store
 
 output?.txt
+._*
+
 
